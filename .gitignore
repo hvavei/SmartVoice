@@ -1,0 +1,26 @@
+# Credentials and local user data must never be published.
+config.json
+settings.json
+credentials.json
+.env
+.env.*
+*.pfx
+*.p12
+*.key
+voices_cache*.json
+voices_metadata*.json
+output/
+exports/
+cache/
+logs/
+*.smartvoice
+*.mp3
+*.wav
+
+# Generated distributions are uploaded as release assets, not source files.
+dist/
+release/
+build/
+__pycache__/
+*.pyc
+models/

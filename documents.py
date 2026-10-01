@@ -1,0 +1,126 @@
+"""文档导入：移除字幕时间标签；纯文本/PDF/SRT 把固定宽度软换行合并成段（空行=段落边界）。"""
+from pathlib import Path
+import re
+
+_SENT_END = '。！？!?…'
+_MARKER = re.compile(r'^(?:\[[^\]]+\]|[^:：\s]{1,12}[:：]|#{1,6}\s|[-*•]\s|\d+[.)、]\s)')
+
+
+def _normalize_newlines(text):
+    # \n / \r\n / \r / LS / PS / NEL / VT / FF 统一成 \n，split('\n') 才能全部分段
+    return (text.replace('\r\n', '\n').replace('\r', '\n')
+            .replace('\u2028', '\n').replace('\u2029', '\n')
+            .replace('\x85', '\n').replace('\x0b', '\n').replace('\x0c', '\n'))
+
+
+def _utf16_no_bom_endian(sample):
+    """无 BOM 的 UTF-16 检测：NUL 落在同一奇偶位（LE=奇数位，BE=偶数位）。"""
+    nul_even = sample[::2].count(0)
+    nul_odd = sample[1::2].count(0)
+    total = nul_even + nul_odd
+    # ≥8 个 NUL、占比 ≥5%、且 ≥70% 集中在同一侧，才判为 UTF-16，避免误伤其它编码
+    if total >= 8 and total * 20 >= len(sample) and max(nul_even, nul_odd) * 10 >= total * 7:
+        return 'utf-16-le' if nul_odd >= nul_even else 'utf-16-be'
+    return None
+
+
+def read_text(path):
+    data = Path(path).read_bytes()
+    if data.startswith((b'\xff\xfe', b'\xfe\xff')):
+        encodings = ('utf-16',)          # 带 BOM：解码器自行识别端序
+    else:
+        endian = _utf16_no_bom_endian(data[:4096])
+        encodings = (endian,) if endian else ('utf-8-sig', 'gb18030')
+    for encoding in encodings:
+        try:
+            return _normalize_newlines(data.decode(encoding))
+        except UnicodeDecodeError:
+            pass
+    raise ValueError('无法识别文本编码，请另存为 UTF-8 后导入')
+
+
+def reflow_text(text):
+    """合并段内软换行，让段落宽度跟随文本框：
+    - 空行分段原样保留；缩进行、纯数字行（字幕序号）不参与合并；
+    - `[标记]`/`名字:`/列表/标题行另起段，避免吃掉上一段；
+    - 段内行以句末标点收尾即成段；拼接时 ASCII 词边界补空格，其余直接相连。
+    """
+    if not text:
+        return text
+    out, para = [], []
+
+    def flush():
+        merged = ''
+        for piece in para:
+            if not merged:
+                merged = piece
+            elif (merged[-1].isascii() and merged[-1].isalnum()
+                  and piece[:1].isascii() and piece[:1].isalnum()):
+                merged += ' ' + piece
+            else:
+                merged += piece
+        if merged:
+            out.append(merged)
+        para.clear()
+
+    for raw in text.split('\n'):
+        stripped = raw.strip()
+        if not stripped:
+            flush()
+            out.append('')
+        elif raw[:1].isspace() or stripped.isdigit():
+            flush()
+            out.append(raw)
+        else:
+            if _MARKER.match(stripped):
+                flush()
+            para.append(stripped)
+            core = stripped.rstrip('"\'”’』」）)】')
+            if core and core[-1] in _SENT_END:
+                flush()
+    flush()
+    return '\n'.join(out)
+
+
+def read_document(path):
+    extension = Path(path).suffix.lower()
+    if extension == '.pdf':
+        import docutils
+        return reflow_text(docutils.extract_pdf_text(path, ocr=True))
+    if extension == '.docx':
+        import zipfile
+        import xml.etree.ElementTree as ET
+        with zipfile.ZipFile(path) as z:
+            root = ET.fromstring(z.read('word/document.xml'))
+        ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        paragraphs = []
+        for p in root.iter(ns + 'p'):
+            content = []
+            for node in p.iter():
+                if node.tag == ns + 't':
+                    content.append(node.text or '')
+                elif node.tag == ns + 'tab':
+                    content.append('\t')
+                elif node.tag in (ns + 'br', ns + 'cr'):
+                    content.append('\n')
+            paragraphs.append(''.join(content))
+        return '\n'.join(paragraphs)
+    text = read_text(path)
+    if extension == '.srt':
+        blocks = re.split(r'\n[ \t]*\n', text)
+        output = []
+        for block in blocks:
+            lines = block.split('\n')
+            if lines and lines[0].strip().isdigit() and len(lines) > 1 and '-->' in lines[1]:
+                lines.pop(0)
+            lines = [re.sub(r'<[^>]+>', '', line) for line in lines if '-->' not in line]
+            output.append('\n'.join(lines))
+        return reflow_text('\n\n'.join(output))
+    if extension == '.lrc':
+        return '\n'.join(re.sub(r'\[(?:\d+:\d+(?:\.\d+)?|(?:ar|ti|al|by|offset):[^\]]*)\]', '', line)
+                         for line in text.split('\n'))
+    # JSON/CSV 保持原始行/空行，避免擅自将结构化数据改写为台词。
+    if extension in ('.json', '.csv'):
+        return text
+    # TXT/Markdown/未知扩展名：合并源文件固定宽度软换行，段落随文本框宽度重排。
+    return reflow_text(text)
