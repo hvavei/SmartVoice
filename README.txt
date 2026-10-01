@@ -52,12 +52,20 @@ Azure 风格和角色来自官方元数据；未知模型族的高级参数保�
 仅监听本机 127.0.0.1（供浏览器插件等本机调用），支持 /voices 与 /forward；
 请求体上限1MB、单次文本上限10万字、连接读写30秒超时；合成/人声列表失败返回结构化错误JSON（502/400）。
 
+发布与组件依赖：
+GitHub Release 需挂载 4 个产物：SmartVoice-Setup-Standard.exe、SmartVoice-Setup-Full.exe、SmartVoice-Signing-Root.cer、signature-status.txt，
+以及 2 个组件包（g2pw-3.1.0-cp314-win-amd64.zip、ocr-3.1.0-cp314-win-amd64.zip，构建自动落在 release/）。
+标准版在线组件发布（tag components-v3.1.0）前下载提示未上传，支持本地导入 zip 激活；完整版内置全套组件无需下载。
+软件仅依赖 Windows 10/11 x64 环境，无管理员权限要求，不依赖本机既有配置或特定路径。
+
 诊断：
 关于 → 复制诊断信息：版本、引擎/区域、人声ID、字数/段数、阶段时间、HTTP状态/错误类型、请求ID。
 关于 → 导出问题报告：默认脱敏；逐项主动确认后才附加原文或音频，不自动上传。
 
 构建与签名：
-首次构建前先运行 python prepare_models.py（下载G2PW推理资产）和 python prepare_branding.py（生成assets图标，需Pillow）。
+开发环境：Python 3.14（唯一实测版本），pip install -r requirements.txt；首次运行还需 Windows 自带的 Tk（python.org 安装包默认包含）。
+首次构建前先运行 python prepare_models.py（联网下载G2PW推理资产到 models/，该目录不入库）。
+assets/ 图标已入库，无需重新生成；更换Logo时才运行 python prepare_branding.py 源图.png --output assets（需Pillow）。
 python build_release.py --compiler "路径\ISCC.exe"
 本机没有代码签名证书时加 --self-signed：自动创建 CN=SmartVoice (Self-Signed) 证书（当前用户、5年）、
 装入本机受信任根证书、下载并钉版校验微软 SDK signtool（http RFC3161 时间戳），
@@ -67,3 +75,4 @@ python build_release.py --compiler "路径\ISCC.exe"
 自签不冒充受信发行者。正式发布用购买的证书：--certificate-thumbprint "证书指纹"
 或 --pfx "路径\certificate.pfx"（密码通过 SMARTVOICE_SIGN_PASSWORD 环境变量提供）。
 测试：python -B -m unittest test_regressions test_product -v
+测试不联网、不依赖已安装组件；未运行 prepare_models.py 时 3 个多音字真实推理测试自动跳过。

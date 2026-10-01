@@ -10,6 +10,9 @@ from unittest.mock import Mock, patch
 
 import engine
 
+MODELS_READY = (Path(__file__).resolve().parent / 'models' / 'g2pw' / 'g2pw.onnx').is_file()
+requires_models = unittest.skipUnless(MODELS_READY, 'python prepare_models.py 资产未下载，跳过真实推理')
+
 
 class EngineTests(unittest.TestCase):
     def test_official_voice_metadata_preserved_without_suffix_filter(self):
@@ -86,19 +89,22 @@ class EngineTests(unittest.TestCase):
 
     def test_pronunciation_preserves_text_and_neutral_tone(self):
         text = '银行重新办理，大腹便便。爸爸妈妈看看，重重叠叠。a&b<c>'
-        with patch('polyphone.annotate_sapi', return_value=(text, {0: 'yin 2', 1: 'hang 2'})):
+        with patch('polyphone.annotate_sapi', return_value=(text, {0: 'yin 2', 1: 'hang 2'})), \
+                patch('components.available', return_value=True):
             root = ET.fromstring(engine._build_ssml('zh-CN-YunxiNeural', text, '100%', '+0Hz', '+0%'))
         self.assertEqual(''.join(root.itertext()), text)
         phones = root.findall('.//{*}phoneme')
         self.assertEqual([p.get('ph') for p in phones], ['yin 2 hang 2'])
         self.assertTrue(all(not p.findall('.//{*}phoneme') for p in phones))
         self.assertNotIn('<break', ET.tostring(root, encoding='unicode'))
-        with patch('polyphone.annotate_sapi', return_value=('便宜', {0: 'pian 2', 1: 'yi 5'})):
+        with patch('polyphone.annotate_sapi', return_value=('便宜', {0: 'pian 2', 1: 'yi 5'})), \
+                patch('components.available', return_value=True):
             self.assertIn("ph='pian 2 yi 5'", engine.g2p_phoneme_annotator('便宜'))
 
     def test_audition_bypasses_g2pw_and_retains_style_and_punctuation(self):
         text = '谁是我们的敌人？谁是我们的朋友？'
-        with patch('polyphone.annotate_sapi') as annotate:
+        with patch('polyphone.annotate_sapi') as annotate, \
+                patch('components.available', return_value=True):
             ssml = engine._build_ssml('zh-CN-XiaoxiaoNeural', text, '100%', '+0Hz', '+0%',
                                       style='friendly', styledegree='100%', annotate=False)
             annotate.assert_not_called()
@@ -109,7 +115,8 @@ class EngineTests(unittest.TestCase):
 
     def test_mai_uses_minimal_original_text_without_loading_model(self):
         text = '谁是我们的敌人？谁是我们的朋友？银行重新办理。a&b<c>'
-        with patch('polyphone.annotate_sapi') as annotate:
+        with patch('polyphone.annotate_sapi') as annotate, \
+                patch('components.available', return_value=True):
             ssml = engine._build_ssml('zh-CN-Lan:MAI-Voice-2-Flash', text, '100%', '+0Hz', '+0%')
             annotate.assert_not_called()
         root = ET.fromstring(ssml)
@@ -123,7 +130,8 @@ class EngineTests(unittest.TestCase):
         cases = [(text[1:], {0: 'hang 2'}),
                  (text, {-1: 'yin 2', 999: 'hang 2', 1: 'hang 2', 2: None})]
         for output in cases:
-            with patch('polyphone.annotate_sapi', return_value=output):
+            with patch('polyphone.annotate_sapi', return_value=output), \
+                    patch('components.available', return_value=True):
                 ssml = engine._build_ssml('zh-CN-XiaoxiaoNeural', text, '100%', '+0Hz', '+0%')
             root = ET.fromstring(ssml)
             self.assertEqual(''.join(root.itertext()), text)
@@ -138,7 +146,8 @@ class EngineTests(unittest.TestCase):
             engine._read_response_bytes(r)
 
     def test_no_mandarin_phonemes_for_other_locales(self):
-        with patch('polyphone.annotate_sapi') as annotate:
+        with patch('polyphone.annotate_sapi') as annotate, \
+                patch('components.available', return_value=True):
             self.assertNotIn('<phoneme', engine._build_ssml('zh-HK-HiuMaanNeural', '银行', '100%', '+0Hz', '+0%'))
             annotate.assert_not_called()
 
@@ -354,6 +363,7 @@ class DocumentTests(unittest.TestCase):
 
 
 class PolyphoneTests(unittest.TestCase):
+    @requires_models
     def test_repeated_contexts_are_inferred_once_per_window(self):
         import polyphone as p
         p._lazy_init()
@@ -374,6 +384,7 @@ class PolyphoneTests(unittest.TestCase):
         finally:
             p._window_cache.clear()
 
+    @requires_models
     def test_repeated_text_reuses_inference_without_sharing_mutable_result(self):
         import polyphone
         polyphone._cached_disambiguate.cache_clear()
@@ -399,7 +410,8 @@ class PolyphoneTests(unittest.TestCase):
         import polyphone
         text = '银行。你好'
         with patch.object(polyphone, 'disambiguate', return_value=['yin2', 'hang2', None, 'ni3', 'hao3']), \
-                patch.object(polyphone, '_s2t', {'银': '銀'}), patch.object(polyphone, '_char_ids', {'行': 0}):
+                patch.object(polyphone, '_s2t', {'银': '銀'}), patch.object(polyphone, '_char_ids', {'行': 0}), \
+                patch('components.available', return_value=True):
             result = engine.g2p_phoneme_annotator(text)
         self.assertEqual(result, "银<phoneme alphabet='sapi' ph='hang 2'>行</phoneme>。你好")
 
@@ -414,6 +426,7 @@ class PolyphoneTests(unittest.TestCase):
             polyphone._lazy_init()
             self.assertEqual(load.call_count, 2)
 
+    @requires_models
     def test_model_real_inference_and_unicode_offsets(self):
         import polyphone
         text, phones = polyphone.annotate_sapi('银行')

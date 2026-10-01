@@ -16,10 +16,14 @@ from functools import lru_cache
 from collections import OrderedDict
 
 import components
-_component_root = components.activate('g2pw')
+_component_root = None
+try:
+    _component_root = components.activate('g2pw')
+except components.MissingComponent:
+    pass  # 导入不因缺组件/资产失败；真正调用时 _load_model 给出明确提示
 import numpy as np
 
-MODEL_DIR = str(_component_root / 'models' / 'g2pw')
+MODEL_DIR = str(_component_root / 'models' / 'g2pw') if _component_root is not None else ''
 
 BATCH = 64
 WINDOW = 32  # 与随包 G2PW config.py 的训练上下文窗口一致
@@ -61,7 +65,7 @@ def _load_model():
     import onnxruntime
 
     vocab_path = os.path.join(MODEL_DIR, "vocab.txt")
-    if not os.path.isfile(vocab_path) or not os.path.isfile(os.path.join(MODEL_DIR, "g2pw.onnx")):
+    if not MODEL_DIR or not os.path.isfile(vocab_path) or not os.path.isfile(os.path.join(MODEL_DIR, "g2pw.onnx")):
         raise RuntimeError("缺少多音字模型资产，请先运行 python prepare_models.py")
 
     vocab = {line: i for i, line in

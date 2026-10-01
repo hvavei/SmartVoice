@@ -1,0 +1,13 @@
+# SmartVoice 开发/构建依赖（Python 3.14 实测版本，2026-09-30 验证）
+edge-tts==7.2.8
+imageio-ffmpeg==0.6.0
+numpy==2.5.2
+onnxruntime==1.30.0
+Pillow==12.3.0
+pypdf==6.19.0
+pypdfium2==5.13.0
+rapidocr-onnxruntime==1.2.3
+requests==2.34.2
+tokenizers==0.23.2
+# 构建依赖（build_release.py 以 python -m PyInstaller 调用）
+pyinstaller==6.22.3

@@ -2,9 +2,9 @@
 
 ## SmartVoice 3.1.0 本轮交付
 - 最终文本工具条使用五列等权Grid，最小窗口实测五个按钮同一行、等宽铺满；时间轴已合并到“当前角色”信息行，外部说明文字已移除。
-- Logo使用实际文件 `E:\Downloads\logoZG.png`（用户提供路径写作 `E:\Download\logoZG.png`，该路径不存在），重新生成无外框/无人工描边图标。
-- Logo `E:\Pictures\TTS_logo.jpg` 已生成 `assets/smartvoice.ico/png`，嵌入主程序、窗口和安装包。
-- Logo 更新为 `E:\Pictures\TTS_logo_2.jpg`（蓝紫人像+耳机+声波）：`prepare_branding.py` 重写为多尺寸专用管线，16/24/32 小尺寸锐化、全档与源图逐像素一致；新增安装向导侧栏图 `wizard-image.bmp`/`wizard-small.bmp` 并接入 Inno Setup。
+- Logo 使用用户提供的图片源文件（用户给出的两个路径其一不存在，以实际存在者为准），重新生成无外框/无人工描边图标。
+- Logo 源图已生成 `assets/smartvoice.ico/png`，嵌入主程序、窗口和安装包。
+- Logo 源图更新（蓝紫人像+耳机+声波）：`prepare_branding.py` 重写为多尺寸专用管线，16/24/32 小尺寸锐化、全档与源图逐像素一致；新增安装向导侧栏图 `wizard-image.bmp`/`wizard-small.bmp` 并接入 Inno Setup。
 - 底部按钮改为：导入文档、合成/取消、播放/停止、暂停/继续、重播、输出目录；删除重试和原暂停按钮。多人区改为角色重置/对话分行，移除全开/全关。
 - 语速滑块将50～200%映射到物理0～100轨道，100%严格在中点；主列表代号列固定不允许拖拽，槽位人声显示居左且窄屏裁切不改变布局。
 - 导入解析抽出为 `documents.py`；TXT/Markdown/PDF/SRT 导入时合并源文件固定宽度软换行（空行=段落边界，缩进/标记行/字幕序号原样保留），排版随文本框宽度重排，JSON/CSV/LRC/DOCX 保持原样；文本框双击打开独立编辑器，默认双击指令被阻止。
@@ -58,6 +58,13 @@
   - 构建与验收：编译器/signtool 解包完成打 `.ok` 标记（无标记视为残留整目录重来），signtool 单文件 .part+原子替换；dist `_internal` 改名-替换-失败回滚（任一中断 dist 都可用上一版恢复）；verify_installer finally 卸载改 check=False（不掩盖真正断言错误、半装无卸载器跳过），安装超时 180→300s（Full 解包在高负载下临界）；diagnose_azure 对 r.json 补结构/类型防护。
   - 评估后明确跳过（记录原因）：双击“合成/取消”为按钮设计语义；stopping 期吞错会掩盖真 bug 不改；normalize_region 路径过滤（火山 appid 误伤）；fix_endpoint 覆盖自定义 host（测试固化）；端点 query 指纹与 safe_url 隐私张力（保留现状+测试固化）；项目 sha 自签（本地工具威胁模型）；长路径需单独设计；Edge synth 内部超时行为未核实不动；退出卡死按有界重试处理。
   - 测试：全套 116 项（+11：OCR 激活顺序、缓存写失败不判死、预览段不进清单、_fail 保留活动进度、save_project 缺失段数与无 .tmp 残留、load_project 类型闸门、无 BOM UTF-16 与分隔符归一、load_json BOM、unique_export 占用换号、/voices 502、响应字节上限）；`--smoke-test` 13 项 PASS；双包 verify `"ok": true`；四产物签名 Valid。
+  ⑫ 环境独立性验证与实证（2026-09-30）：
+  - 依赖清单：新增 `requirements.txt`（含 10 个直接依赖 + pyinstaller==6.22.3 构建依赖，钉版）。
+  - 干净 venv 构建：在全新隔离 Python 3.14 venv 下 `pip install -r requirements.txt` 成功；`prepare_models.py` 联网下载资产；`build_release.py --fetch-compiler --self-signed` 全量重编，双包 `verify_installer` `"ok": true`。
+  - 零数据首启验证：重定向 `SMARTVOICE_DATA_DIR` 到空临时目录，源码与 dist 冒烟全过（13 PASS），GUI 顺利完成首次建档（写入 settings/credentials/cache）并显示 `SmartVoice 3.1.0`。
+  - 模块解耦：`polyphone.py` 模块导入安全重构（缺组件时不崩溃，调用时 `_load_model` 报缺资产）；6 个测试增加 `components.available` 显式 patch；3 个真实推理测试增加 `@requires_models` 跳过守卫。
+  - 脱敏：`AUDIT.md` 盘符路径（`E:\...`）全量脱敏，仓内仅保留 Windows 系统/标准提供程序路径（`C:/Windows/Fonts`、`Cert:\`）与 GitHub/127.0.0.1 标准地址；全仓无硬编码用户名或本机专属路径。
+  - 诚实边界：独立性仅在 Windows 11 x64（本机 + venv + 隔离数据目录）通过自动化测试与安装验收；未在其他物理 PC/Windows 10 实机验证；自签证书在其他电脑需导入根证书；合成服务依然依赖网络连通性。
 - 标准包 `SmartVoice-Setup-Standard.exe` 不含 G2PW/OCR重组件；完整版 `SmartVoice-Setup-Full.exe` 包含全部组件。独立 `g2pw-3.1.0-cp314-win-amd64.zip`、`ocr-3.1.0-cp314-win-amd64.zip` 以SHA256清单供标准版按需下载/本地导入。组件URL指向 GitHub Release `components-v3.1.0`，在该Release创建前下载会明确提示未上传。
 - 标准/完整版安装验收均通过：应用启动、G2PW/FFmpeg/OCR/DPAPI/项目缓存；标准版额外安装两个组件后完整检查通过；升级和卸载保留用户数据。
 - 当前 `release/signature-status.txt` 为 `SELF-SIGNED: CN=SmartVoice (Self-Signed) ...`，四个产物 sign+verify 全过（见⑩）；未使用任何第三方证书冒充受信发行者。
