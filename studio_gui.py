@@ -23,6 +23,7 @@ import storage
 import theme
 from config_store import ConfigStore
 from ui.serverbar import build_serverbar
+from ui.toolbar import build_toolbar
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
@@ -552,22 +553,7 @@ class App(ProductUI):
         build_serverbar(self, f6)
 
     def _setup_f5(self, f5):
-        buttons = (
-            ('b_import', '导入文本', self.import_txt),
-            ('b_single', '合成/取消', self.on_single),
-            ('b_play', '播放/停止', self.toggle_playback),
-            ('b_stop', '暂停/继续', self.toggle_pause),
-            ('b_open', '输出目录', self.open_out),
-        )
-        for column, (attr, text, command) in enumerate(buttons):
-            button = self._mkbtn(f5, text, command, width=8)
-            # 与“刷新”“角色分配”“角色重置”统一使用默认 TButton。
-            # 保留等宽 grid 布局，但不再使用 Tool.TButton 的紧凑色彩/高度。
-            button.configure(style='TButton')
-            button.grid(row=0, column=column, padx=2, pady=1, sticky='ew')
-            setattr(self, attr, button)
-            f5.columnconfigure(column, weight=1, uniform='text_tools')
-        f5.rowconfigure(0, weight=1)
+        build_toolbar(self, f5)
 
     def _setup_f4(self, f4, IX, IY):
         title_row = ttk.Frame(f4)
