@@ -24,6 +24,7 @@ import theme
 from config_store import ConfigStore
 from ui.serverbar import build_serverbar
 from ui.toolbar import build_toolbar
+from ui.configbar import build_configbar, ZOOMS
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
@@ -34,7 +35,7 @@ OUT_DIR = str(storage.EXPORT_DIR)
 AUDITION_TEXT = "谁是我们的敌人？谁是我们的朋友？"
 
 # 两套主题(暖白·初/雾蓝) — 颜色统一定义在 theme.py，切换时同步模块并重建界面
-ZOOMS = [80, 90, 100, 110, 125, 150]
+# ZOOMS 随配置栏搬入 ui.configbar，此处经由 import 重导出以兼容旧引用。
 
 
 class MciPlayer:
@@ -493,40 +494,7 @@ class App(ProductUI):
             pass
 
     def _setup_f1(self, f1, IX, IY):
-        ttk.Label(f1, text="引擎:").grid(row=0, column=0, padx=IX, pady=IY, sticky="e")
-        self.engine_combo = ttk.Combobox(f1, textvariable=self.engine_var,
-                                        values=engine.ENGINE_CHOICES, state="readonly", width=16)
-        self.engine_combo.grid(row=0, column=1, padx=IX, pady=IY, sticky="ew")
-        self.engine_combo.bind("<<ComboboxSelected>>", lambda e: self.on_engine_switch())
-        self.lab_key = ttk.Label(f1, text="Key:", width=7, anchor="e")
-        self.lab_key.grid(row=0, column=2, padx=IX, sticky="e")
-        self.key_entry = ttk.Entry(f1, textvariable=self.key_var, width=20, justify="center")
-        self.key_entry.grid(row=0, column=3, padx=2, sticky="ew")
-        self._apply_show()
-        self._toggle(f1, self.show_var, "显示", self._apply_show).grid(row=0, column=4, padx=IX, sticky="w")
-        ttk.Frame(f1).grid(row=0, column=5, sticky="ew")
-        zoom_box = ttk.Frame(f1)
-        zoom_box.grid(row=0, column=6, columnspan=2, padx=(IX, IX + 8), sticky="e")
-        self.lab_zoom = ttk.Label(zoom_box, text="界面缩放:")
-        self.lab_zoom.pack(side="left", padx=(0, 4))
-        self.zb = ttk.Combobox(zoom_box, textvariable=self.zoom_var, values=ZOOMS,
-                               state="readonly", width=6, justify="center")
-        self.zb.pack(side="left")
-        self.zb.bind("<<ComboboxSelected>>", lambda e: self.on_zoom())
-        self.lab_region = ttk.Label(f1, text="Region:", width=7, anchor="e")
-        self.lab_region.grid(row=1, column=0, padx=IX, pady=IY, sticky="e")
-        self.region_entry = ttk.Entry(f1, textvariable=self.region_var, width=16, justify="center")
-        self.region_entry.grid(row=1, column=1, padx=IX, sticky="ew")
-        self.lab_ep = ttk.Label(f1, text="终结点:", width=7, anchor="e")
-        self.lab_ep.grid(row=1, column=2, padx=IX, sticky="e")
-        self.ep_entry = ttk.Entry(f1, textvariable=self.ep_var, width=20, justify="center")
-        self.ep_entry.grid(row=1, column=3, padx=2, sticky="ew")
-        self._toggle(f1, self.remember_var, "记住Key", self._save_cfg).grid(row=1, column=4, padx=IX, sticky="w")
-        f1.columnconfigure(3, weight=1, minsize=80)
-        f1.columnconfigure(5, weight=1)
-        for entry in (self.key_entry, self.region_entry, self.ep_entry):
-            self._bind_entry_context_menu(entry)
-        self._refresh_engine_fields()
+        build_configbar(self, f1, IX, IY)
 
     def _setup_f2(self, f2, IX, IY):
         for row, (label, attr, var, values) in enumerate((
