@@ -63,11 +63,29 @@
   - 干净 venv 构建：在全新隔离 Python 3.14 venv 下 `pip install -r requirements.txt` 成功；`prepare_models.py` 联网下载资产；`build_release.py --fetch-compiler --self-signed` 全量重编，双包 `verify_installer` `"ok": true`。
   - 零数据首启验证：重定向 `SMARTVOICE_DATA_DIR` 到空临时目录，源码与 dist 冒烟全过（13 PASS），GUI 顺利完成首次建档（写入 settings/credentials/cache）并显示 `SmartVoice 3.1.0`。
   - 模块解耦：`polyphone.py` 模块导入安全重构（缺组件时不崩溃，调用时 `_load_model` 报缺资产）；6 个测试增加 `components.available` 显式 patch；3 个真实推理测试增加 `@requires_models` 跳过守卫。
-  - 脱敏：`AUDIT.md` 盘符路径（`E:\...`）全量脱敏，仓内仅保留 Windows 系统/标准提供程序路径（`C:/Windows/Fonts`、`Cert:\`）与 GitHub/127.0.0.1 标准地址；全仓无硬编码用户名或本机专属路径。
+  - 脱敏：`AUDIT.md` 个人盘符路径全量脱敏，仓内仅保留 Windows 系统/标准提供程序路径（`C:/Windows/Fonts`、`Cert:\`）与 GitHub/127.0.0.1 标准地址；全仓无硬编码用户名或本机专属路径。
   - 诚实边界：独立性仅在 Windows 11 x64（本机 + venv + 隔离数据目录）通过自动化测试与安装验收；未在其他物理 PC/Windows 10 实机验证；自签证书在其他电脑需导入根证书；合成服务依然依赖网络连通性。
+  ⑬ 配置输入框右键与 Key 保存修复（2026-10-04）：
+  - 输入框右键：全仓仅 Text 有 `<Button-3>` 菜单，Key/Region/终结点/端口/角色名/导出设置共 17 个 Entry 原生无右键（鼠标无法粘贴 Key）——新增通用 `_bind_entry_context_menu(entry)`（剪切/复制/粘贴/删除/全选，菜单挂控件名下随销毁），4 处接线全覆盖。
+  - Key 保存：实证保存链路正常——未记住时 Key 被 strip 系安全设计（默认不落盘），记住开启时 DPAPI vault 回写/重载正常；真正的缺口是输入无 trace（仅离散动作与关窗触发保存）——key/region/ep/port 加 `trace_add` 输入即暂存（`_save_cfg` 内已有 350ms 去抖），`_save_cfg` 内 region 回写加值比守卫防 trace 自递归；未记住且 Key 非空时状态栏一次性提示「仅本次有效」；README 同步说明。
+  - 垃圾代码/框架核查：全仓无 TODO/FIXME/打印调试残留；无 eval/exec/shell=True（构建调 powershell 用列表形参）；CLI 全链路冒烟覆盖；配置读写全部走 LOCALAPPDATA（可 SMARTVOICE_DATA_DIR 重定向），安装包不带 config/缓存/成品（verify 断言）。
+  - 个人信息：盘符/UNC/机器名/用户名全仓零命中（仅保留 Cert:\、C:/Windows/Fonts 系统路径与 GitHub/127.0.0.1）。
+  - 测试：新增 3 项（输入框右键存在、输入即暂存+提示、记住/未记住载荷）；全套 133 项 OK，冒烟 13 PASS。
 - 标准包 `SmartVoice-Setup-Standard.exe` 不含 G2PW/OCR重组件；完整版 `SmartVoice-Setup-Full.exe` 包含全部组件。独立 `g2pw-3.1.0-cp314-win-amd64.zip`、`ocr-3.1.0-cp314-win-amd64.zip` 以SHA256清单供标准版按需下载/本地导入。组件URL指向 GitHub Release `components-v3.1.0`，在该Release创建前下载会明确提示未上传。
 - 标准/完整版安装验收均通过：应用启动、G2PW/FFmpeg/OCR/DPAPI/项目缓存；标准版额外安装两个组件后完整检查通过；升级和卸载保留用户数据。
 - 当前 `release/signature-status.txt` 为 `SELF-SIGNED: CN=SmartVoice (Self-Signed) ...`，四个产物 sign+verify 全过（见⑩）；未使用任何第三方证书冒充受信发行者。
+
+## ⑬ 稳定性与解析性能复核（2026-10-02）
+- 复核筛查报告后纠正误报：Edge 已有进度回调；配置读取已自动解密；签名扩展属性实测为 ObjectId；内置人声表、filedialog、Tk 的 _tclCommands 和冒烟 Session 替身均有用途。保留既有菜单、取消语义和未注音缓存指纹兼容性。
+- 导出：修正本轮中间修改导致的成功导出临时硬链接残留；新增写入/fsync 失败的临时文件清理。DPAPI 输出缓冲在异常路径也进入释放流程。
+- 文本：对所有候选编码检查 NUL，拒绝误当文本的含零字节输入；英文逗号/分号/冒号后的软换行补空格，同时保留连字符和开括号拼接语义。PDF 页面树异常也关闭 reader；OCR 单页失败带页号明确报错，不静默丢页。
+- 网络：OpenAI 即使没有进度回调也走有上限的流式读取并关闭响应；转发响应显式 Connection: close；重复取消不重复遍历已经取出的响应集合。CLI 端口在解析后校验范围，冒烟 HTTP 服务在异常路径也释放并恢复原始描述符。
+- 组件：重新导入使用旧目录备份、替换、原子指针提交；失败回滚，已激活组件拒绝破坏性覆盖并提示重启。保留 OCR 包的公共依赖源码，安装验收改为 OCR 先独立装验，再装 G2PW。
+- 编辑器：角色高亮按标签批量提交，每批最多256段；文稿/角色未变时移动光标复用结果；不采用超5万字关闭高亮的降级方案。定时回调防护销毁控件，进度条重绘缓存包含 Canvas 身份并支持控件重建；布局不再嵌套 update_idletasks。
+- G2PW：分词映射改为单次正则遍历，消除反复复制剩余字符串；删除 _truncate 未使用的偏移列表计算。移除无入口的 clear_audition_cache 方法，不恢复已精简的菜单项。
+- 构建：依赖目录拷贝失败时清理半份目录并恢复旧目录；验收覆盖含空格/中文路径与空用户数据目录。
+- 回归：隔离 venv 中130项测试全部通过（97.272秒），源码及冻结EXE冒烟各13项PASS；新增 test_stability.py 覆盖异常清理、组件修复/回滚、OCR失败提示、大文本批量刷新及Canvas重建。
+- 发布验收：隔离 venv 干净重编成功；Standard 初始回退、单独安装OCR、再安装G2PW逐步检查通过，Full 内置模型检查通过，双包均 `ok: true`，升级/卸载保留数据。双EXE和双安装包签名均Valid（自签）；空用户数据目录下GUI标题正确并能正常关闭。以上为当前Windows环境验证，不等同跨设备或在线服务端到端实测。
 
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。

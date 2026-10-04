@@ -269,6 +269,7 @@ class EngineTests(unittest.TestCase):
 
     def test_openai_model_and_bad_response(self):
         response = Mock(status_code=200, headers={'Content-Type': 'audio/mpeg'}, content=b'ID3test')
+        response.iter_content.return_value = [b'ID3test']
         session = Mock()
         session.post.return_value = response
         with patch.object(engine, '_sess', return_value=session):
@@ -479,6 +480,36 @@ class GuiTests(unittest.TestCase):
         a.engine_var.set(engine.ENGINE_CHOICES[0])
         a.on_engine_switch()
         self.assertEqual(a.key_var.get(), 'azure-only')
+
+    def test_config_entries_have_right_click_menu(self):
+        a = self.app
+        for entry in (a.key_entry, a.region_entry, a.ep_entry, a.port_entry):
+            self.assertTrue(str(entry.bind("<Button-3>")).strip())
+            self.assertIsNotNone(getattr(entry, "_sv_entry_menu", None))
+
+    def test_typing_key_schedules_save_and_hints_when_unremembered(self):
+        a = self.app
+        a.remember_var.set(False)
+        a._key_hint_shown = False
+        a.key_var.set("typed-secret")
+        self.assertIsNotNone(a._cfg_pending)
+        self.assertIn("记住Key", a.status.cget("text"))
+
+    def test_remembered_key_reaches_persist_payload(self):
+        a = self.app
+        a.remember_var.set(True)
+        a.key_var.set("persist-secret")
+        a._save_cfg()
+        pending = a._cfg_pending
+        self.assertTrue(pending["remember_key"])
+        self.assertEqual(pending["key"], "persist-secret")
+        self.assertEqual(pending["engine_profiles"]["azure"]["key"], "persist-secret")
+        a.remember_var.set(False)
+        a.key_var.set("temp-secret")
+        a._save_cfg()
+        pending = a._cfg_pending
+        self.assertEqual(pending["key"], "")
+        self.assertEqual(pending["engine_profiles"]["azure"]["key"], "")
 
     def test_parallel_synthesis_is_bounded_and_output_stays_in_order(self):
         import threading
@@ -1181,6 +1212,35 @@ class DeepRegressionTests(unittest.TestCase):
         with patch.object(engine, 'MAX_RESPONSE_BYTES', 8 * 1024):
             with self.assertRaises(requests.exceptions.ChunkedEncodingError):
                 engine._read_response_bytes(FakeResponse())
+
+    def test_read_text_skips_gb18030_for_binary_data_with_nul(self):
+        import documents
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
+            f.write(b'Header\x00\x01\x02Binary\x00Data')
+            tmp = Path(f.name)
+        try:
+            with self.assertRaises(ValueError):
+                documents.read_text(tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def test_forward_server_uses_connection_close_header(self):
+        import http.client
+        import threading
+        import forward_server
+
+        srv = forward_server.ThreadingHTTPServer(('127.0.0.1', 0), forward_server._Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            conn = http.client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+            conn.request('GET', '/')
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get('Connection'), 'close')
+            conn.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
 
 if __name__ == '__main__':

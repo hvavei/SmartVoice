@@ -24,11 +24,12 @@ exports：默认成品输出位置；可在导出设置中更改。
 
 项目/编辑：
 “选项 → 保存/打开”保留原稿、角色、人声、参数、已完成片段和导出记录。
-项目不含账户凭证。换电脑需重新填写该电脑的凭证。
+项目不含账户凭证。换电脑需重新填写该电脑的凭证。Key 默认仅本次有效；勾选「记住Key」才会加密保存。
 主编辑区支持 Ctrl+Z/Ctrl+Y；文本右键菜单含剪切/复制/粘贴/试听，
 “独立大窗口编辑”共享原稿和撤销栈，其编辑操作也全部集成到右键菜单。
 对话分行只做排版，不重置角色或音色；Ctrl+Z 可撤销。
 角色标签用颜色标识，未绑定标签有提示；可试听当前行或选中文字。
+长文本角色高亮采用批量更新；仅移动光标时复用高亮结果，保留未绑定角色提示。
 
 合成与取消：
 启动前逐一检查实际人声支持的风格/角色/参数。VoiceType 与 SSML 能力分开处理。
@@ -56,6 +57,7 @@ Azure 风格和角色来自官方元数据；未知模型族的高级参数保�
 GitHub Release 需挂载 4 个产物：SmartVoice-Setup-Standard.exe、SmartVoice-Setup-Full.exe、SmartVoice-Signing-Root.cer、signature-status.txt，
 以及 2 个组件包（g2pw-3.1.0-cp314-win-amd64.zip、ocr-3.1.0-cp314-win-amd64.zip，构建自动落在 release/）。
 标准版在线组件发布（tag components-v3.1.0）前下载提示未上传，支持本地导入 zip 激活；完整版内置全套组件无需下载。
+离线重新导入可修复损坏的组件；替换失败恢复旧目录。组件已加载时需重启后再导入修复。
 软件仅依赖 Windows 10/11 x64 环境，无管理员权限要求，不依赖本机既有配置或特定路径。
 
 诊断：
@@ -63,7 +65,7 @@ GitHub Release 需挂载 4 个产物：SmartVoice-Setup-Standard.exe、SmartVoic
 关于 → 导出问题报告：默认脱敏；逐项主动确认后才附加原文或音频，不自动上传。
 
 构建与签名：
-开发环境：Python 3.14（唯一实测版本），pip install -r requirements.txt；首次运行还需 Windows 自带的 Tk（python.org 安装包默认包含）。
+开发环境：Python 3.14（唯一实测版本），pip install -r requirements.txt；源码运行需 Tcl/Tk（python.org 安装包默认包含）。
 首次构建前先运行 python prepare_models.py（联网下载G2PW推理资产到 models/，该目录不入库）。
 assets/ 图标已入库，无需重新生成；更换Logo时才运行 python prepare_branding.py 源图.png --output assets（需Pillow）。
 python build_release.py --compiler "路径\ISCC.exe"
@@ -74,5 +76,5 @@ python build_release.py --compiler "路径\ISCC.exe"
 安装到“受信任的根证书颁发机构（当前用户）”，SmartScreen 联网信誉提示不会因此消失，
 自签不冒充受信发行者。正式发布用购买的证书：--certificate-thumbprint "证书指纹"
 或 --pfx "路径\certificate.pfx"（密码通过 SMARTVOICE_SIGN_PASSWORD 环境变量提供）。
-测试：python -B -m unittest test_regressions test_product -v
+测试：python -B -m unittest test_regressions test_product test_stability -v
 测试不联网、不依赖已安装组件；未运行 prepare_models.py 时 3 个多音字真实推理测试自动跳过。

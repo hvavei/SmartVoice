@@ -465,6 +465,10 @@ class App(ProductUI):
         self.rebuild_list()
         self._build_product_menu()
         self._schedule_editor_info()
+        # 配置输入即暂存(_save_cfg 内去抖)；Key 另带未记住提示。程序赋值走显式 _save_cfg，不经 trace。
+        self.key_var.trace_add("write", self._on_key_edited)
+        for var in (self.region_var, self.ep_var, self.port_var):
+            var.trace_add("write", lambda *a: self._save_cfg())
 
     def _fit_text_toolbar(self):
         try:
@@ -506,6 +510,8 @@ class App(ProductUI):
         self._toggle(f1, self.remember_var, "记住Key", self._save_cfg).grid(row=1, column=4, padx=IX, sticky="w")
         f1.columnconfigure(3, weight=1, minsize=80)
         f1.columnconfigure(5, weight=1)
+        for entry in (self.key_entry, self.region_entry, self.ep_entry):
+            self._bind_entry_context_menu(entry)
         self._refresh_engine_fields()
 
     def _setup_f2(self, f2, IX, IY):
@@ -532,7 +538,8 @@ class App(ProductUI):
     def _setup_f6(self, f6):
         # 端口输入由 _reflow 统一布点，此处只创建控件。
         ttk.Label(f6, text="端口:")
-        ttk.Entry(f6, textvariable=self.port_var, width=8, justify="center")
+        self.port_entry = ttk.Entry(f6, textvariable=self.port_var, width=8, justify="center")
+        self._bind_entry_context_menu(self.port_entry)
         self.server_btn = self._mkbtn(f6, "停止转发" if self.server else "启动转发", self.toggle_server)
         self.server_lab = ttk.Label(f6, text="运行中" if self.server else "未启动", foreground=FEEDBACK)
         self._flowbar(f6)
@@ -759,6 +766,56 @@ class App(ProductUI):
 
         widget.bind("<Button-3>", _popup)
 
+    def _bind_entry_context_menu(self, entry):
+        """单行输入框右键菜单(剪切/复制/粘贴/删除/全选)；Key/地址类 Entry 原生无右键，需显式绑定。"""
+        old = getattr(entry, "_sv_entry_menu", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except tk.TclError:
+                pass
+        menu = tk.Menu(entry, tearoff=0, font=self._menu_font())
+        entry._sv_entry_menu = menu
+
+        def delete():
+            try:
+                if entry.selection_present():
+                    entry.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+
+        def select_all():
+            try:
+                entry.focus_set()
+                entry.select_range(0, "end")
+            except tk.TclError:
+                pass
+
+        menu.add_command(label="剪切 (Ctrl+X)", command=lambda: entry.event_generate("<<Cut>>"))
+        menu.add_command(label="复制 (Ctrl+C)", command=lambda: entry.event_generate("<<Copy>>"))
+        menu.add_command(label="粘贴 (Ctrl+V)", command=lambda: entry.event_generate("<<Paste>>"))
+        menu.add_command(label="删除", command=delete)
+        menu.add_command(label="全选", command=select_all)
+
+        def _popup(e):
+            try:
+                menu.tk_popup(e.x_root, e.y_root)
+            finally:
+                menu.grab_release()
+
+        entry.bind("<Button-3>", _popup)
+
+    def _on_key_edited(self, *a):
+        """Key 输入即暂存(去抖在 _save_cfg 内)；未勾选记住时给一次性状态提示。"""
+        self._save_cfg()
+        try:
+            if (self.key_var.get().strip() and not self.remember_var.get()
+                    and not getattr(self, "_key_hint_shown", False)):
+                self._key_hint_shown = True
+                self.status.config(text="Key 仅本次有效，打开「记住Key」才会加密保存")
+        except tk.TclError:
+            pass
+
     def on_format_dialogue_lines(self):
         """点击『角色分配』按钮：按段落/引号机械分行；叙述绑定第一个启用角色，引号对话保留默认人声"""
         txt = self._get_real_text()
@@ -946,10 +1003,13 @@ class App(ProductUI):
         self._theme()
         self.root.minsize(640, max(700, round(700*self._zx())))
         def update(widget):
-            if 'font' in widget.keys():
-                widget.configure(font=self._font_bold() if 'bold' in str(widget.cget('font')) else self._font())
-            for child in widget.winfo_children():
-                update(child)
+            try:
+                if 'font' in widget.keys():
+                    widget.configure(font=self._font_bold() if 'bold' in str(widget.cget('font')) else self._font())
+                for child in widget.winfo_children():
+                    update(child)
+            except tk.TclError:
+                pass
         for child in self.root.winfo_children():
             if not isinstance(child, tk.Menu):
                 update(child)
@@ -1037,7 +1097,8 @@ class App(ProductUI):
                 rg = (engine.normalize_region(self.region_var.get())
                       if engine.kind_of(self.engine_var.get()) == "azure"
                       else self.region_var.get().strip())
-                self.region_var.set(rg)
+                if self.region_var.get() != rg:
+                    self.region_var.set(rg)
             except Exception:
                 rg = self.region_var.get().strip()
             self._engine_profiles[self._field_kind] = {
@@ -1130,9 +1191,11 @@ class App(ProductUI):
 
     def _prog_draw(self, value=None):
         ui = getattr(self, "_prog_ui", None)
-        if not ui or not self.prog.winfo_exists():
+        if not ui:
             return
         try:
+            if not self.prog.winfo_exists():
+                return
             w = self.prog.winfo_width()
             h = self.prog.winfo_height()
             if w <= 1:
@@ -1140,19 +1203,24 @@ class App(ProductUI):
             if h <= 1:
                 h = int(self.prog.cget("height"))
             if not self.prog.find_withtag("track"):
+                self._last_fill_r = None
                 self.prog.create_rectangle(0, 0, 0, 0, outline=BORDER, fill="#f8fafc", tags="track")
                 self.prog.create_rectangle(0, 0, 0, 0, outline="", fill=GREEN, tags="fill")
-            self.prog.coords("track", 0, 0, w - 1, h - 1)
             mx = max(1, ui.get("maximum", 100))
             v = ui["value"] if value is None else value
             ratio = min(1.0, max(0.0, float(v) / float(mx)))
+            fill_r = (w - 1) if ratio >= 0.999 else int(1 + (w - 2) * ratio) if ratio > 0 else 0
+            geometry = (self.prog, fill_r, w, h)
+            if getattr(self, '_last_fill_r', None) == geometry:
+                return
+            self.prog.coords("track", 0, 0, w - 1, h - 1)
             if ratio > 0:
                 # 满格时严格填满到 w - 1，无任何右侧缝隙与空白
-                fill_r = (w - 1) if ratio >= 0.999 else int(1 + (w - 2) * ratio)
                 self.prog.coords("fill", 1, 1, fill_r, h - 1)
                 self.prog.itemconfigure("fill", state="normal")
             else:
                 self.prog.itemconfigure("fill", state="hidden")
+            self._last_fill_r = geometry
         except tk.TclError:
             pass
 
@@ -1910,6 +1978,7 @@ class App(ProductUI):
             # 角色名称输入框宽度调整为 8，文字居中；失焦或清空时自动恢复默认名称
             ent = ttk.Entry(card, textvariable=name_v, width=8, justify="center")
             ent.grid(row=0, column=1, padx=2)
+            self._bind_entry_context_menu(ent)
             def _on_name_focus_out(e, idx=i, var=name_v):
                 if not var.get().strip():
                     default_name = "旁白" if idx == 0 else f"角色{idx + 1}"
@@ -2312,10 +2381,6 @@ class App(ProductUI):
                 labelwidget = str(bar.cget('labelwidget'))
             except tk.TclError:
                 labelwidget = ''
-            try:
-                bar.update_idletasks()
-            except tk.TclError:
-                return
             # 先清掉旧grid列配置, 否则列数变少时残留uniform会挤压
             try:
                 ncols = max(len(kids), 8)

@@ -110,7 +110,7 @@ class ProductUI:
     def _editor_target(self):
         try:
             widget = self.root.focus_get()
-            if isinstance(widget, tk.Text):
+            if isinstance(widget, tk.Text) and widget.winfo_exists():
                 return widget
             last = getattr(self, '_active_editor', None)
             return last if last is not None and last.winfo_exists() else self.text
@@ -148,40 +148,54 @@ class ProductUI:
 
     def _refresh_editor_info(self):
         self._editor_after = None
+        try:
+            self._update_editor_info()
+        except tk.TclError:
+            pass  # 定时回调到达时，编辑窗口或主界面可能已经销毁。
+
+    def _update_editor_info(self):
         if not hasattr(self, 'editor_info'):
             return
         raw = self.text.get('1.0', 'end-1c')
         slots = self._dub.get('slots', [])
-        names = {s['name'].get().strip(): i for i, s in enumerate(slots) if s['on'].get()}
+        names = {s['name'].get().strip()[:12]: i for i, s in enumerate(slots) if s['on'].get()}
         colors = ['#e5f1ff', '#edf6ff', '#dcecff', '#eef7ff', '#e8f3ff', '#d9eaff']
-        for tag in self.text.tag_names():
-            if tag.startswith('speaker_'):
-                self.text.tag_remove(tag, '1.0', 'end')
-        missing = set()
-        for n, line in enumerate(raw.splitlines(), 1):
-            m = re.match(r'^\s*(?:\[([^\]]+)\]|([^:：\s]{1,12})[:：])', line)
-            if not m:
-                continue
-            bracketed = m.group(1) is not None
-            name = (m.group(1) or m.group(2)).strip()
-            if not bracketed and name not in names:
-                # 冒号前缀不在槽位（时间/URL/口头语）：按普通文本处理，不着色不报警。
-                continue
-            if name in names:
-                tag = f'speaker_{names[name]}'
-                self.text.tag_configure(tag, background=colors[names[name] % len(colors)])
-            else:
-                tag = 'speaker_missing'
-                self.text.tag_configure(tag, underline=True, foreground='#a34100')
-                missing.add(name)
-            self.text.tag_add(tag, f'{n}.0', f'{n}.{m.end()}')
-        self.text.tag_raise('sel')
+        signature = (self.text, raw, tuple(names.items()))
+        if signature != getattr(self, '_editor_highlight_signature', None):
+            for tag in self.text.tag_names():
+                if tag.startswith('speaker_'):
+                    self.text.tag_remove(tag, '1.0', 'end')
+            missing, ranges = set(), {}
+            paragraphs = 0
+            for n, line in enumerate(raw.split('\n'), 1):
+                paragraphs += bool(line.strip())
+                m = re.match(r'^\s*(?:\[([^\]]+)\]|([^:：\s]{1,12})[:：])', line)
+                if not m:
+                    continue
+                name = (m.group(1) or m.group(2)).strip()
+                if m.group(1) is None and name not in names:
+                    continue
+                tag = f'speaker_{names[name]}' if name in names else 'speaker_missing'
+                if name not in names:
+                    missing.add(name)
+                ranges.setdefault(tag, []).extend((f'{n}.0', f'{n}.{m.end()}'))
+            for tag, indices in ranges.items():
+                if tag == 'speaker_missing':
+                    self.text.tag_configure(tag, underline=True, foreground='#a34100')
+                else:
+                    self.text.tag_configure(tag, background=colors[int(tag[8:]) % len(colors)])
+                for start in range(0, len(indices), 512):
+                    self.text.tag_add(tag, *indices[start:start + 512])
+            self.text.tag_raise('sel')
+            self._editor_highlight_signature = signature
+            self._editor_highlight_stats = (paragraphs, missing)
+        paragraphs, missing = self._editor_highlight_stats
         line = self._editor_target().get('insert linestart', 'insert lineend')
         m = re.match(r'^\s*(?:\[([^\]]+)\]|([^:：\s]{1,12})[:：])', line)
         role = '默认人声'
         if m and (m.group(1) or (m.group(2) or '').strip() in names):
             role = (m.group(1) or m.group(2)).strip()
-        self.editor_role.config(text=f'{len(raw)}字 · {sum(bool(l.strip()) for l in raw.splitlines())}段 · 当前角色：{role}'
+        self.editor_role.config(text=f'{len(raw)}字 · {paragraphs}段 · 当前角色：{role}'
                                 + (f' · 未绑定：{",".join(sorted(missing))[:45]}' if missing else ''))
         if hasattr(self, '_placeholder_label'):
             self._placeholder_label.place_forget() if raw else self._placeholder_label.place(x=12, y=8)
@@ -394,7 +408,9 @@ class ProductUI:
         for row, (label, var) in enumerate((('输出目录', self.export_dir), ('文件名', self.export_name),
                                            ('开头留白(ms)', self.leading_ms), ('结尾留白(ms)', self.trailing_ms))):
             ttk.Label(top, text=label).grid(row=row, column=0, padx=8, pady=6)
-            ttk.Entry(top, textvariable=var, width=48).grid(row=row, column=1, padx=8, pady=6)
+            ent = ttk.Entry(top, textvariable=var, width=48)
+            ent.grid(row=row, column=1, padx=8, pady=6)
+            self._bind_entry_context_menu(ent)
         def browse():
             path = filedialog.askdirectory(parent=top)
             if path:
@@ -544,21 +560,6 @@ class ProductUI:
                 top.destroy()
         top.protocol('WM_DELETE_WINDOW', close)
         poll()
-
-    def clear_audition_cache(self):
-        if self._active_task:
-            return messagebox.showinfo('试听缓存', '请先完成或取消当前任务')
-        with self._audition_cache_lock:
-            count = len(self._audition_cache)
-            self._audition_cache.clear()
-        for path in (storage.CACHE_DIR / 'auditions').glob('*'):
-            if path.is_file():
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError:
-                    # 被播放器/杀软短暂占用的文件跳过, 不阻断整体清理
-                    pass
-        self.status.config(text=f'已清除 {count} 条试听缓存；项目片段缓存和用户作品未删除')
 
     def copy_diagnostics(self):
         data = self._diag.snapshot() if self._diag else {'software': appmeta.NAME, 'version': appmeta.VERSION, 'state': '尚无合成任务'}
