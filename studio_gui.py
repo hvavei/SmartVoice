@@ -25,6 +25,7 @@ from config_store import ConfigStore
 from ui.serverbar import build_serverbar
 from ui.toolbar import build_toolbar
 from ui.configbar import build_configbar, ZOOMS
+from ui.stylepanel import build_stylepanel
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
@@ -497,25 +498,7 @@ class App(ProductUI):
         build_configbar(self, f1, IX, IY)
 
     def _setup_f2(self, f2, IX, IY):
-        for row, (label, attr, var, values) in enumerate((
-                ("风格:", "style_combo", self.style_var, engine.STYLES),
-                ("强度:", "deg_combo", self.deg_var, engine.DEGREES),
-                ("角色:", "role_combo", self.role_var, engine.ROLES))):
-            ttk.Label(f2, text=label).grid(row=row, column=0, padx=IX, sticky="e")
-            combo = ttk.Combobox(f2, textvariable=var, values=values, state="readonly", width=18)
-            combo.grid(row=row, column=1, padx=IX, sticky="ew")
-            combo.bind("<<ComboboxSelected>>", lambda e: self._on_style_change())
-            setattr(self, attr, combo)
-        self.rate_lab = ttk.Label(f2, width=6, anchor="e")
-        self.vol_lab = ttk.Label(f2, width=6, anchor="e")
-        self.pitch_lab = ttk.Label(f2, width=6, anchor="e")
-        self._slider(f2, 0, 2, "语速", self.rate_var, 50, 200, self.rate_lab, 100)
-        self._slider(f2, 1, 2, "音量", self.vol_var, 50, 150, self.vol_lab, 100)
-        self._slider(f2, 2, 2, "音调", self.pitch_var, -12, 12, self.pitch_lab, 0)
-        for row in range(3):
-            f2.grid_rowconfigure(row, minsize=max(30, round(34 * self._zx())))
-        self._show_rvp()
-        self._refresh_style_state()
+        build_stylepanel(self, f2, IX, IY)
 
     def _setup_f6(self, f6):
         build_serverbar(self, f6)
