@@ -12,6 +12,7 @@ import appmeta
 import engine
 import storage
 import voice_tasks as workflow
+from ui.menus import build_product_menu
 from theme import ACCENT, BG, BORDER, FG, PANEL, ROLE, SEL, WARN
 import theme
 
@@ -72,48 +73,7 @@ class ProductUI:
         self.normalize_var = tk.BooleanVar(value=cfg_bool(export.get('normalize', False)))
 
     def _build_product_menu(self):
-        # 顶栏只保留三个入口：编辑类操作走文本右键，停止由“合成/取消”承担。
-        mfont = self._menu_font()
-        bar = tk.Menu(self.root, font=mfont)
-        menu_colors = dict(bg=PANEL, fg=FG, activebackground=SEL, activeforeground=FG)
-
-        def submenu(parent=None):
-            return tk.Menu(parent or bar, tearoff=False, font=mfont, **menu_colors)
-
-        project = submenu()
-        for label, command in [('新建项目', self.new_project), ('打开项目…', self.open_project),
-                               ('保存项目', self.save_project), ('项目另存为…', lambda: self.save_project(True))]:
-            project.add_command(label=label, command=command)
-        project.add_separator()
-        project.add_command(label='导出设置…', command=self.export_settings)
-        project.add_command(label='打开刚生成的文件', command=self.open_last_export)
-        bar.add_cascade(label='选项', menu=project)
-
-        comp = submenu()
-        comp.add_command(label='管理组件（G2PW / 扫描PDF OCR）', command=self.component_manager)
-        bar.add_cascade(label='组件', menu=comp)
-
-        theme_menu = submenu()
-        for _key in theme.THEME_ORDER:
-            theme_menu.add_radiobutton(label=theme.THEME_LABELS[_key], variable=self._theme_var,
-                                       value=_key, command=lambda k=_key: self.switch_theme(k))
-        bar.add_cascade(label='主题', menu=theme_menu)
-
-        about = submenu()
-        for label, command in [('版本说明', lambda: messagebox.showinfo(appmeta.NAME, appmeta.RELEASE_NOTES)),
-                               ('检查更新', self.check_updates),
-                               ('反馈问题（GitHub）', lambda: webbrowser.open(appmeta.FEEDBACK_URL)),
-                               (None, None),
-                               ('复制诊断信息', self.copy_diagnostics), ('导出问题报告…', self.export_diagnostics),
-                               ('打开用户数据目录', self.open_data_dir)]:
-            if label is None:
-                about.add_separator()
-            else:
-                about.add_command(label=label, command=command)
-        bar.add_cascade(label='关于', menu=about)
-
-        self.root.configure(menu=bar)
-        self.root.bind('<Control-s>', lambda e: (self.save_project(), 'break')[-1])
+        build_product_menu(self)
 
     def _editor_target(self):
         try:
