@@ -12,7 +12,8 @@ import appmeta
 import engine
 import storage
 import voice_tasks as workflow
-from theme import ACCENT, BG, BORDER, FG, PANEL
+from theme import ACCENT, BG, BORDER, FG, PANEL, ROLE, SEL, WARN
+import theme
 
 
 def cfg_int(value, default, lo=None, hi=None):
@@ -74,9 +75,10 @@ class ProductUI:
         # 顶栏只保留三个入口：编辑类操作走文本右键，停止由“合成/取消”承担。
         mfont = self._menu_font()
         bar = tk.Menu(self.root, font=mfont)
+        menu_colors = dict(bg=PANEL, fg=FG, activebackground=SEL, activeforeground=FG)
 
-        def submenu():
-            return tk.Menu(bar, tearoff=False, font=mfont)
+        def submenu(parent=None):
+            return tk.Menu(parent or bar, tearoff=False, font=mfont, **menu_colors)
 
         project = submenu()
         for label, command in [('新建项目', self.new_project), ('打开项目…', self.open_project),
@@ -85,6 +87,11 @@ class ProductUI:
         project.add_separator()
         project.add_command(label='导出设置…', command=self.export_settings)
         project.add_command(label='打开刚生成的文件', command=self.open_last_export)
+        theme_menu = submenu(project)
+        for _key in theme.THEME_ORDER:
+            theme_menu.add_radiobutton(label=theme.THEME_LABELS[_key], variable=self._theme_var,
+                                       value=_key, command=lambda k=_key: self.switch_theme(k))
+        project.add_cascade(label='主题', menu=theme_menu)
         bar.add_cascade(label='选项', menu=project)
 
         comp = submenu()
@@ -159,7 +166,7 @@ class ProductUI:
         raw = self.text.get('1.0', 'end-1c')
         slots = self._dub.get('slots', [])
         names = {s['name'].get().strip()[:12]: i for i, s in enumerate(slots) if s['on'].get()}
-        colors = ['#e5f1ff', '#edf6ff', '#dcecff', '#eef7ff', '#e8f3ff', '#d9eaff']
+        colors = ROLE
         signature = (self.text, raw, tuple(names.items()))
         if signature != getattr(self, '_editor_highlight_signature', None):
             for tag in self.text.tag_names():
@@ -181,7 +188,7 @@ class ProductUI:
                 ranges.setdefault(tag, []).extend((f'{n}.0', f'{n}.{m.end()}'))
             for tag, indices in ranges.items():
                 if tag == 'speaker_missing':
-                    self.text.tag_configure(tag, underline=True, foreground='#a34100')
+                    self.text.tag_configure(tag, underline=True, foreground=WARN)
                 else:
                     self.text.tag_configure(tag, background=colors[int(tag[8:]) % len(colors)])
                 for start in range(0, len(indices), 512):

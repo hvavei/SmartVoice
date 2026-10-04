@@ -511,6 +511,60 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(pending["key"], "")
         self.assertEqual(pending["engine_profiles"]["azure"]["key"], "")
 
+    def test_theme_palettes_are_valid_and_readable(self):
+        import theme
+
+        def lum(hex_color):
+            r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+            f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+            return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+        def ratio(a, b):
+            la, lb = sorted((lum(a), lum(b)), reverse=True)
+            return (la + 0.05) / (lb + 0.05)
+
+        keys = set(theme.THEMES["warm"])
+        self.assertEqual(set(theme.THEME_ORDER), set(theme.THEMES))
+        self.assertEqual(set(theme.THEME_LABELS), set(theme.THEMES))
+        for name, pal in theme.THEMES.items():
+            self.assertEqual(set(pal), keys, name)
+            for k, v in pal.items():
+                vals = v if k == "ROLE" else [v]
+                if k == "ROLE":
+                    self.assertEqual(len(vals), 6, name)
+                for c in vals:
+                    self.assertRegex(c, r"^#[0-9a-f]{6}$", (name, k))
+            self.assertGreaterEqual(ratio(pal["FG"], pal["PANEL"]), 4.5, (name, "正文"))
+            self.assertGreaterEqual(ratio(pal["FEEDBACK"], pal["BG"]), 4.5, (name, "描述"))
+        self.assertEqual(theme.THEMES["warm"]["FG"], "#000000")
+        self.assertEqual(theme.THEMES["mist"]["FG"], "#000000")
+
+    def test_theme_switch_rebuilds_and_persists(self):
+        import theme
+        a = self.app
+        try:
+            with patch.object(engine, "save_json") as mock_save:
+                a.switch_theme("mist")
+                self.root.update()
+                self.assertEqual(theme.ACTIVE, "mist")
+                import tkinter.ttk as ttk
+                self.assertEqual(ttk.Style(self.root).lookup("Status.TLabel", "foreground"),
+                                 theme.THEMES["mist"]["FEEDBACK"])
+                self.assertEqual(str(a.text.cget("bg")), theme.THEMES["mist"]["PANEL"])
+                self.assertEqual(str(a.text.cget("fg")), theme.THEMES["mist"]["FG"])
+                self.assertIn("雾蓝", a.status.cget("text"))
+                a._flush_cfg()
+                fut = a._cfg_pool.submit(lambda: None)
+                fut.result(timeout=30)
+                cfg = mock_save.call_args[0][1]
+                self.assertEqual(cfg["theme"], "mist")
+        finally:
+            a.switch_theme("warm")
+            self.root.update()
+        self.assertEqual(theme.ACTIVE, "warm")
+        from theme import FG
+        self.assertEqual(FG, "#000000")
+
     def test_parallel_synthesis_is_bounded_and_output_stays_in_order(self):
         import threading
         import time

@@ -7,6 +7,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,15 +20,17 @@ from tkinter import filedialog, messagebox, ttk
 import engine
 import appmeta
 import storage
+import theme
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
-                   BG, MUTED, PANEL, SEL, TROUGH)
+                   BG, HEADING, HOVER, MUTED, OUTLINE, PANEL, SEL,
+                   TOGGLE_IDLE, TOGGLE_OFF, TOGGLE_ON, TRACK, TROUGH)
 
 OUT_DIR = str(storage.EXPORT_DIR)
 AUDITION_TEXT = "谁是我们的敌人？谁是我们的朋友？"
 
-# 精致浅色主题(高对比) — 颜色统一定义在 theme.py
+# 两套主题(暖白·初/雾蓝) — 颜色统一定义在 theme.py，切换时同步模块并重建界面
 ZOOMS = [80, 90, 100, 110, 125, 150]
 
 
@@ -214,6 +217,9 @@ class App(ProductUI):
         self._bg_polling = False
         self._dub = {}  # 重建时重填的配音控件引用
         self._load_engine_voices()
+        self._theme_name = theme.apply(cfg.get("theme", theme.DEFAULT_THEME),
+                                       globals(), sys.modules.get("product_ui"))
+        self._theme_var = tk.StringVar(value=self._theme_name)
         root.title(f"{appmeta.NAME} {appmeta.VERSION}")
         icon = Path(__file__).resolve().parent / 'assets' / 'smartvoice.ico'
         if icon.is_file():
@@ -318,23 +324,24 @@ class App(ProductUI):
         s.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=self._font_bold())
         s.configure("TButton", background=PANEL, foreground=FG, borderwidth=1,
                     bordercolor=BORDER, padding=6)
-        s.map("TButton", background=[("active", "#f2e9e3")], bordercolor=[("active", ACCENT)])
+        s.map("TButton", background=[("active", HOVER)], bordercolor=[("active", ACCENT)])
         s.configure("Accent.TButton", background=ACCENT, foreground="white", borderwidth=0, padding=6)
         s.map("Accent.TButton", background=[("active", ACCENT_D)])
         s.configure("Tool.TButton", background=PANEL, foreground=FG,
                     borderwidth=1, bordercolor=BORDER, padding=6)
-        s.map("Tool.TButton", background=[("active", "#f2e9e3")],
+        s.map("Tool.TButton", background=[("active", HOVER)],
               bordercolor=[("active", ACCENT)])
         s.configure("TCombobox", fieldbackground=PANEL, background=PANEL,
-                    foreground=FG, arrowcolor=ACCENT)
+                    foreground=FG, arrowcolor=ACCENT,
+                    lightcolor=BORDER, darkcolor=TROUGH, bordercolor=BORDER)
         s.configure("TEntry", fieldbackground=PANEL, foreground=FG, justify="center")
-        s.configure("Vertical.TScrollbar", background="#ded7d0", troughcolor=BG,
+        s.configure("Vertical.TScrollbar", background=TROUGH, troughcolor=BG,
                     borderwidth=0, arrowcolor=ACCENT)
         s.configure("Status.TLabel", background=BG, foreground=FEEDBACK)
         rh = max(24, round(26 * self.zoom_var.get() / 100))
         s.configure("Treeview", background=PANEL, foreground=FG,
                     fieldbackground=PANEL, font=self._font(), rowheight=rh, borderwidth=0)
-        s.configure("Treeview.Heading", background="#eee8e2", foreground=FG, font=self._font())
+        s.configure("Treeview.Heading", background=HEADING, foreground=FG, font=self._font())
         s.map("Treeview", background=[("selected", SEL)], foreground=[("selected", FG)])
 
     def _load_engine_voices(self):
@@ -675,7 +682,7 @@ class App(ProductUI):
     def _paint_toggle(btn, on):
         btn.config(text="开" if on else "关", relief="raised", bd=2,
                    bg=GREEN if on else GREY, fg="white",
-                   activebackground="#078a5e" if on else "#9aa5b1",
+                   activebackground=TOGGLE_ON if on else TOGGLE_IDLE,
                    activeforeground="white",
                    highlightbackground=GREEN if on else GREY)
 
@@ -722,7 +729,8 @@ class App(ProductUI):
             except tk.TclError:
                 pass
         # 菜单挂在 widget 名下: 控件销毁(独立编辑窗口关闭)时随之一并销毁, 不泄漏
-        menu = tk.Menu(widget, tearoff=0, font=self._menu_font())
+        menu = tk.Menu(widget, tearoff=0, font=self._menu_font(),
+                       bg=PANEL, fg=FG, activebackground=SEL, activeforeground=FG)
         widget._sv_ctx_menu = menu
 
         def undo():
@@ -774,7 +782,8 @@ class App(ProductUI):
                 old.destroy()
             except tk.TclError:
                 pass
-        menu = tk.Menu(entry, tearoff=0, font=self._menu_font())
+        menu = tk.Menu(entry, tearoff=0, font=self._menu_font(),
+                       bg=PANEL, fg=FG, activebackground=SEL, activeforeground=FG)
         entry._sv_entry_menu = menu
 
         def delete():
@@ -1017,6 +1026,25 @@ class App(ProductUI):
         self._save_cfg()
         self._reflow_all()
 
+    def switch_theme(self, name):
+        """切换主题：同步调色板到业务模块、关闭已开子窗口、重建界面并持久化。"""
+        if self._active_task:
+            return messagebox.showinfo('任务运行中', '请先取消或等待任务完成再切换主题')
+        key = theme.apply(name, globals(), sys.modules.get("product_ui"))
+        self._theme_name = key
+        self._theme_var.set(key)
+        for attr in ("_editor_window", "_export_win", "_component_win"):
+            win = getattr(self, attr, None)
+            try:
+                if win is not None and win.winfo_exists():
+                    win.destroy()
+            except tk.TclError:
+                pass
+            setattr(self, attr, None)
+        self._build_ui()
+        self._save_cfg()
+        self.status.config(text=f"已切换主题：{theme.THEME_LABELS[key]}")
+
     def on_engine_switch(self):
         if self._active_task:
             self.engine_var.set(self._retry_plan[1]['engine'] if self._retry_plan else self.engine_var.get())
@@ -1115,6 +1143,7 @@ class App(ProductUI):
                 "degree": self.deg_var.get(), "role": self.role_var.get(),
                 "port": self.port_var.get().strip(), "zoom": cfg_int(self.zoom_var.get(), 100, 80, 150),
                 "remember_key": bool(self.remember_var.get()),
+                "theme": self._theme_name,
                 "key": self.key_var.get() if self.remember_var.get() else "",
                 "export": self._export_options_safe(),
                 "multidub": [dict(s) for s in self._dub_cfg_snapshot()]}
@@ -1204,7 +1233,7 @@ class App(ProductUI):
                 h = int(self.prog.cget("height"))
             if not self.prog.find_withtag("track"):
                 self._last_fill_r = None
-                self.prog.create_rectangle(0, 0, 0, 0, outline=BORDER, fill="#f8fafc", tags="track")
+                self.prog.create_rectangle(0, 0, 0, 0, outline=BORDER, fill=TRACK, tags="track")
                 self.prog.create_rectangle(0, 0, 0, 0, outline="", fill=GREEN, tags="fill")
             mx = max(1, ui.get("maximum", 100))
             v = ui["value"] if value is None else value
@@ -1968,8 +1997,8 @@ class App(ProductUI):
             def _update_color(var=on_v, cv=color_cv, sz=box_sz):
                 try:
                     cv.delete("all")
-                    fill_col = GREEN if var.get() else "#e2e6eb"
-                    cv.create_rectangle(1, 1, sz - 1, sz - 1, fill=fill_col, outline="#7d8b99", width=1)
+                    fill_col = GREEN if var.get() else TOGGLE_OFF
+                    cv.create_rectangle(1, 1, sz - 1, sz - 1, fill=fill_col, outline=OUTLINE, width=1)
                 except tk.TclError:
                     pass
             _update_color()
