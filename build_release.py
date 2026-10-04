@@ -141,6 +141,27 @@ def ensure_self_signed(work, export_path):
     return thumb
 
 
+def replace_internal(source, internal):
+    """发布依赖目录失败时清除半份拷贝，再恢复旧目录。"""
+    old = internal.with_name(internal.name + '.old')
+    if not internal.exists() and old.exists():
+        old.rename(internal)
+    if old.exists():
+        shutil.rmtree(old)
+    if internal.exists():
+        internal.rename(old)
+    try:
+        shutil.copytree(source, internal)
+    except Exception:
+        if internal.exists():
+            shutil.rmtree(internal)
+        if old.exists():
+            old.rename(internal)
+        raise
+    if old.exists():
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workdir', type=Path, default=Path(tempfile.gettempdir()) / 'SmartVoice-release')
@@ -166,7 +187,9 @@ def main():
     if not args.skip_build:
         # 增量判断只比较资源路径而不比较资源内容，仅更新 assets/ 图标不会触发 EXE 重打标，
         # 会留下旧图标的可执行文件；完整构建始终从干净构建目录开始。
+        # dist 也要清：PyInstaller --noconfirm 不删旧输出，已删除的旧文件会混入新安装包。
         shutil.rmtree(work / 'build', ignore_errors=True)
+        shutil.rmtree(work / 'dist', ignore_errors=True)
         subprocess.run([sys.executable, '-B', '-m', 'PyInstaller', '--noconfirm',
                         '--workpath', str(work / 'build'), '--distpath', str(work / 'dist'),
                         str(ROOT / 'SmartVoice.spec')], cwd=ROOT, check=True)
@@ -204,23 +227,12 @@ def main():
     # 先改名旧目录再放入新目录：任何一步中断，dist 都还能恢复出可用的上一版。
     dist = ROOT / 'dist'
     dist.mkdir(exist_ok=True)
-    internal, old = dist / '_internal', dist / '_internal.old'
-    if not internal.exists() and old.exists():
-        old.rename(internal)  # 上次替换中断的恢复
-    if old.exists():
-        shutil.rmtree(old, ignore_errors=True)
-    if internal.exists():
-        internal.rename(old)
-    try:
-        shutil.copytree(stage / '_internal', internal)
-    except Exception:
-        if not internal.exists() and old.exists():
-            old.rename(internal)
-        raise
-    if old.exists():
-        shutil.rmtree(old, ignore_errors=True)
-    shutil.copy2(stage / 'README.txt', dist / 'README.txt')
-    shutil.copy2(stage / 'SmartVoice.exe', dist / 'SmartVoice.exe')
+    replace_internal(stage / '_internal', dist / '_internal')
+    # exe/README 与 _internal 联动：先写 .new 再原子替换，中断不留"新依赖+旧程序"错配。
+    for name in ('SmartVoice.exe', 'README.txt'):
+        tmp = dist / (name + '.new')
+        shutil.copy2(stage / name, tmp)
+        os.replace(tmp, dist / name)
     print('Installers:', release / 'SmartVoice-Setup-Standard.exe', release / 'SmartVoice-Setup-Full.exe', flush=True)
     print('Application:', dist / 'SmartVoice.exe', flush=True)
 

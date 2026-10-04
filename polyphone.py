@@ -58,15 +58,25 @@ def _lazy_init():
 
 def _load_model():
     global _tok, _sess, _labels, _char2phonemes, _chars, _monophonic, \
-        _s2t, _bopomofo_to_pinyin, _char_bopomofo, _pinyin_labels, _char_ids
+        _s2t, _bopomofo_to_pinyin, _char_bopomofo, _pinyin_labels, _char_ids, \
+        _component_root, MODEL_DIR
     from tokenizers import Tokenizer
     from tokenizers.models import WordPiece
     from tokenizers.pre_tokenizers import BertPreTokenizer
     import onnxruntime
 
-    vocab_path = os.path.join(MODEL_DIR, "vocab.txt")
-    if not MODEL_DIR or not os.path.isfile(vocab_path) or not os.path.isfile(os.path.join(MODEL_DIR, "g2pw.onnx")):
+    try:
+        _component_root = components.activate('g2pw')
+        MODEL_DIR = str(_component_root / 'models' / 'g2pw')
+    except components.MissingComponent:
+        pass  # 沿用导入时解析的路径；缺失在下面统一报缺资产
+    required = ("vocab.txt", "g2pw.onnx", "POLYPHONIC_CHARS.txt", "MONOPHONIC_CHARS.txt",
+                "bopomofo_to_pinyin_wo_tune_dict.json", "char_bopomofo_dict.json",
+                "bert-base-chinese_s2t_dict.txt")
+    if not MODEL_DIR or any(not os.path.isfile(os.path.join(MODEL_DIR, name)) for name in required):
         raise RuntimeError("缺少多音字模型资产，请先运行 python prepare_models.py")
+
+    vocab_path = os.path.join(MODEL_DIR, "vocab.txt")
 
     vocab = {line: i for i, line in
              enumerate(Path(vocab_path).read_text(encoding="utf-8").splitlines())}
@@ -80,8 +90,13 @@ def _load_model():
 
     def _rows(name):
         p = os.path.join(MODEL_DIR, name)
-        return [line.split("\t") for line in
-                Path(p).read_text(encoding="utf-8").strip().splitlines()]
+        rows = []
+        for line in Path(p).read_text(encoding="utf-8").strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) != 2:
+                raise RuntimeError(f"多音字资产损坏（{name}），请重跑 python prepare_models.py")
+            rows.append(parts)
+        return rows
 
     poly = _rows("POLYPHONIC_CHARS.txt")
     _monophonic = dict(_rows("MONOPHONIC_CHARS.txt"))
@@ -89,7 +104,7 @@ def _load_model():
     _bopomofo_to_pinyin = json.loads(Path(MODEL_DIR,
         "bopomofo_to_pinyin_wo_tune_dict.json").read_text(encoding="utf-8"))
 
-    # 用转换后的拼音覆盖原生注音符号标签
+    # 用转换后的拼音覆盖原生注音符号标签；个别标签无映射时为 None，调用方按无注音跳过。
     _labels = sorted({ph for _, ph in poly})
     _pinyin_labels = [_b2p(label) for label in _labels]
     
@@ -113,26 +128,14 @@ def _b2p(bopomofo):
 
 def _wordize_and_map(text):
     words, text2word, word2text = [], [], []
-    while text:
-        m = re.match(r"^ +", text)
-        if m:
-            text2word += [None] * len(m.group(0))
-            text = text[len(m.group(0)):]
+    for match in re.finditer(r' +|[a-zA-Z0-9]+|[^ ]', text):
+        word = match.group()
+        if word[0] == ' ':
+            text2word.extend([None] * len(word))
             continue
-        m = re.match(r"^[a-zA-Z0-9]+", text)
-        if m:
-            en = m.group(0)
-            start = len(text2word)
-            word2text.append((start, start + len(en)))
-            text2word += [len(words)] * len(en)
-            words.append(en)
-            text = text[len(en):]
-        else:
-            start = len(text2word)
-            word2text.append((start, start + 1))
-            text2word.append(len(words))
-            words.append(text[0])
-            text = text[1:]
+        word2text.append(match.span())
+        text2word.extend([len(words)] * len(word))
+        words.append(word)
     return words, text2word, word2text
 
 
@@ -161,7 +164,7 @@ def _tokenize_and_map(text):
 def _truncate(text, tokens, text2token, token2text, query_id, max_len=512):
     trunc = max_len - 2
     if len(tokens) <= trunc:
-        return text, query_id, tokens, text2token, token2text
+        return text, query_id, tokens, text2token
     tp = text2token[query_id]
     ts = tp - trunc // 2
     te = ts + trunc
@@ -175,8 +178,7 @@ def _truncate(text, tokens, text2token, token2text, query_id, max_len=512):
         te -= back
     s, e = token2text[ts][0], token2text[te - 1][1]
     return (text[s:e], query_id - s, tokens[ts:te],
-            [i - ts if i is not None else None for i in text2token[s:e]],
-            [(a - s, b - s) for a, b in token2text[ts:te]])
+            [i - ts if i is not None else None for i in text2token[s:e]])
 
 
 def disambiguate(text):
@@ -248,7 +250,7 @@ def _disambiguate(text):
     for key in pending:
         window, query_id = key
         tokens, text2token, token2text = _tokenize_and_map(window)
-        stext, sqid, stokens, stext2token, stoken2text = _truncate(
+        stext, sqid, stokens, stext2token = _truncate(
             window, tokens, text2token, token2text, query_id)
         proc = ["[CLS]"] + stokens + ["[SEP]"]
         token_ids = [_tok.token_to_id(token) for token in proc]

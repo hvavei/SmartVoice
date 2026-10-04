@@ -12,6 +12,8 @@ import appmeta
 COMMON = ('numpy', 'numpy.libs', 'onnxruntime', 'tokenizers')
 OCR = ('cv2', 'rapidocr_onnxruntime', 'shapely', 'shapely.libs', 'pyclipper', 'yaml')
 ABI = f'cp{sys.version_info.major}{sys.version_info.minor}-win-amd64'
+ZIP_COMPRESSLEVEL = 3  # 组件包体积与解包速度的折中
+UNPACKED_SLACK = 65536  # 允许 zip 元数据与实际展开的字节误差
 
 
 def optional(name):
@@ -74,14 +76,15 @@ def package(full, work, release):
                     shutil.copytree(path, payload/path.name)
                 else:
                     shutil.copy2(path, payload/path.name)
-        for module in ('numpy', 'onnxruntime', 'tokenizers') + (('cv2', 'rapidocr_onnxruntime', 'shapely', 'pyclipper', 'yaml') if name == 'ocr' else ()):
+        modules = ('numpy', 'onnxruntime', 'tokenizers') + (('cv2', 'rapidocr_onnxruntime', 'shapely', 'pyclipper', 'yaml') if name == 'ocr' else ())
+        for module in modules:
             copy_sources(module, payload)
         manifest = {'name': name, 'abi': ABI, 'version': appmeta.VERSION}
         (payload/'component.json').write_text(json.dumps(manifest), encoding='utf-8')
         filename = f'{name}-{appmeta.VERSION}-{ABI}.zip'
         archive_path = release / filename
         unpacked = 0
-        with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=3) as z:
+        with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=ZIP_COMPRESSLEVEL) as z:
             for path in sorted(payload.rglob('*')):
                 if path.is_file():
                     unpacked += path.stat().st_size

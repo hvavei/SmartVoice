@@ -87,16 +87,17 @@ class ProductUI:
         project.add_separator()
         project.add_command(label='导出设置…', command=self.export_settings)
         project.add_command(label='打开刚生成的文件', command=self.open_last_export)
-        theme_menu = submenu(project)
-        for _key in theme.THEME_ORDER:
-            theme_menu.add_radiobutton(label=theme.THEME_LABELS[_key], variable=self._theme_var,
-                                       value=_key, command=lambda k=_key: self.switch_theme(k))
-        project.add_cascade(label='主题', menu=theme_menu)
         bar.add_cascade(label='选项', menu=project)
 
         comp = submenu()
         comp.add_command(label='管理组件（G2PW / 扫描PDF OCR）', command=self.component_manager)
         bar.add_cascade(label='组件', menu=comp)
+
+        theme_menu = submenu()
+        for _key in theme.THEME_ORDER:
+            theme_menu.add_radiobutton(label=theme.THEME_LABELS[_key], variable=self._theme_var,
+                                       value=_key, command=lambda k=_key: self.switch_theme(k))
+        bar.add_cascade(label='主题', menu=theme_menu)
 
         about = submenu()
         for label, command in [('版本说明', lambda: messagebox.showinfo(appmeta.NAME, appmeta.RELEASE_NOTES)),

@@ -281,8 +281,8 @@ class App(ProductUI):
         return ("微软雅黑", max(8, round((10 + delta) * self.zoom_var.get() / 100)), "bold")
 
     def _menu_font(self):
-        """顶栏/右键菜单字号与功能区标题一致，随缩放同步。"""
-        return ("微软雅黑", self._font_bold()[1])
+        """顶栏/右键菜单统一 14pt，不随缩放变化。"""
+        return ("微软雅黑", 14)
 
     def _title_widget(self, parent, text, color=None):
         """功能区标题：主字下方1px柔和阴影；同格 grid 叠放（place 不参与请求尺寸，会塌缩成1px不可见）。"""
@@ -688,7 +688,6 @@ class App(ProductUI):
 
     def _setup_placeholder(self, placeholder):
         """提示是覆盖标签，不写进原稿和撤销栈。"""
-        self._is_placeholder = False
         self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 双击打开大窗口编辑',
                                             bg=PANEL, fg=MUTED, font=self._font())
         self._placeholder_label.bind('<Button-1>', lambda e: (self._placeholder_label.place_forget(), self.text.focus_set()))
@@ -702,14 +701,11 @@ class App(ProductUI):
         self.text.edit_reset()
 
     def _get_real_text(self):
-        """安全读取真实文本内容（排除灰色占位文本）"""
-        if getattr(self, "_is_placeholder", False):
-            return ""
+        """读取真实文本内容（占位只是覆盖 Label，文本框本身为空，无需标志位）"""
         return self.text.get("1.0", "end-1c")
 
     def _set_real_text(self, text):
         """外部填入真实文本时退出占位状态"""
-        self._is_placeholder = False
         self.text.config(fg=FG)
         self.text.edit_separator()
         self.text.configure(autoseparators=False)
@@ -744,8 +740,6 @@ class App(ProductUI):
             self._schedule_editor_info()
 
         def paste():
-            if widget is self.text and self._is_placeholder:
-                self._set_real_text("")
             widget.event_generate("<<Paste>>")
 
         def delete():
@@ -770,7 +764,10 @@ class App(ProductUI):
             try:
                 menu.tk_popup(e.x_root, e.y_root)
             finally:
-                menu.grab_release()
+                try:
+                    menu.grab_release()
+                except tk.TclError:
+                    pass
 
         widget.bind("<Button-3>", _popup)
 
@@ -810,7 +807,10 @@ class App(ProductUI):
             try:
                 menu.tk_popup(e.x_root, e.y_root)
             finally:
-                menu.grab_release()
+                try:
+                    menu.grab_release()
+                except tk.TclError:
+                    pass
 
         entry.bind("<Button-3>", _popup)
 
@@ -1033,6 +1033,10 @@ class App(ProductUI):
         key = theme.apply(name, globals(), sys.modules.get("product_ui"))
         self._theme_name = key
         self._theme_var.set(key)
+        try:
+            self.text_content = self.text.get('1.0', 'end-1c')
+        except (tk.TclError, AttributeError):
+            pass
         for attr in ("_editor_window", "_export_win", "_component_win"):
             win = getattr(self, attr, None)
             try:
@@ -1393,7 +1397,8 @@ class App(ProductUI):
             if preview:
                 # 试听文件按名覆盖：同名旧文件先删，避免 cache\auditions 只增不减。
                 pattern = re.compile(re.escape(name) + r'(?:-\d+)?\.' + re.escape(options['format']))
-                for old in Path(directory).glob(name + '*'):
+                from glob import escape
+                for old in Path(directory).glob(escape(name) + '*'):
                     if old.is_file() and pattern.fullmatch(old.name):
                         try:
                             old.unlink()
@@ -2375,15 +2380,14 @@ class App(ProductUI):
         self.root.after(50, lambda: self._reflow_current(bar))
 
     def _reflow_debounced(self, bar):
-        # 子栏Configure抖动多, 只在宽度真正变化时重排
+        # 子栏Configure抖动多, 只在宽度真正变化时重排；宽度记在栏自身，随控件销毁，不用 id() 键。
         try:
             W = bar.winfo_width()
         except tk.TclError:
             return
-        key = f"_fw_{id(bar)}"
-        if abs(W - getattr(self, key, 0)) < 6:
+        if abs(W - getattr(bar, "_flow_w", 0)) < 6:
             return
-        setattr(self, key, W)
+        bar._flow_w = W
         _, _, ix, iy = self._pads()
         self._reflow(bar, ix, iy)
 

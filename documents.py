@@ -2,15 +2,18 @@
 from pathlib import Path
 import re
 
+MAX_TEXT_BYTES = 32 * 1024**2  # 单文件上限：超限请拆分，避免一次性读入吃光内存
+
 _SENT_END = '。！？!?…'
 _MARKER = re.compile(r'^(?:\[[^\]]+\]|[^:：\s]{1,12}[:：]|#{1,6}\s|[-*•]\s|\d+[.)、]\s)')
+_NEWLINES = re.compile(r'\r\n|[\r\u2028\u2029\x85\x0b\x0c]')
+_SRT_TAG = re.compile(r'</?(?:font|b|i|u|s|ruby|rt)\b[^>]*>', re.I)
+_LRC_TAG = re.compile(r'\[(?:\d+:\d+(?::\d+(?:\.\d+)?)?(?:\.\d+)?|(?:ar|ti|al|by|offset|length|re|ve):[^\]]*)\]', re.I)
 
 
 def _normalize_newlines(text):
     # \n / \r\n / \r / LS / PS / NEL / VT / FF 统一成 \n，split('\n') 才能全部分段
-    return (text.replace('\r\n', '\n').replace('\r', '\n')
-            .replace('\u2028', '\n').replace('\u2029', '\n')
-            .replace('\x85', '\n').replace('\x0b', '\n').replace('\x0c', '\n'))
+    return _NEWLINES.sub('\n', text)
 
 
 def _utf16_no_bom_endian(sample):
@@ -26,6 +29,8 @@ def _utf16_no_bom_endian(sample):
 
 def read_text(path):
     data = Path(path).read_bytes()
+    if len(data) > MAX_TEXT_BYTES:
+        raise ValueError('文件过大（超过32MB），请拆分后导入')
     if data.startswith((b'\xff\xfe', b'\xfe\xff')):
         encodings = ('utf-16',)          # 带 BOM：解码器自行识别端序
     else:
@@ -33,7 +38,10 @@ def read_text(path):
         encodings = (endian,) if endian else ('utf-8-sig', 'gb18030')
     for encoding in encodings:
         try:
-            return _normalize_newlines(data.decode(encoding))
+            decoded = data.decode(encoding)
+            if '\x00' in decoded:
+                continue
+            return _normalize_newlines(decoded)
         except UnicodeDecodeError:
             pass
     raise ValueError('无法识别文本编码，请另存为 UTF-8 后导入')
@@ -54,7 +62,7 @@ def reflow_text(text):
         for piece in para:
             if not merged:
                 merged = piece
-            elif (merged[-1].isascii() and merged[-1].isalnum()
+            elif (merged[-1].isascii() and (merged[-1].isalnum() or merged[-1] in ',;:')
                   and piece[:1].isascii() and piece[:1].isalnum()):
                 merged += ' ' + piece
             else:
@@ -86,13 +94,24 @@ def read_document(path):
     extension = Path(path).suffix.lower()
     if extension == '.pdf':
         import docutils
-        return reflow_text(docutils.extract_pdf_text(path, ocr=True))
+        return reflow_text(_normalize_newlines(docutils.extract_pdf_text(path, ocr=True)))
     if extension == '.docx':
         import zipfile
         import xml.etree.ElementTree as ET
-        with zipfile.ZipFile(path) as z:
-            root = ET.fromstring(z.read('word/document.xml'))
+        try:
+            with zipfile.ZipFile(path) as z:
+                try:
+                    data = z.read('word/document.xml')
+                except KeyError:
+                    raise ValueError('DOCX 缺少正文，请另存后导入')
+        except zipfile.BadZipFile as e:
+            raise ValueError('DOCX 已损坏，请另存后导入') from e
+        root = ET.fromstring(data)
         ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        if not list(root.iter(ns + 'p')):
+            strict = '{http://purl.oclc.org/ooxml/wordprocessingml/main}'
+            if list(root.iter(strict + 'p')):
+                ns = strict
         paragraphs = []
         for p in root.iter(ns + 'p'):
             content = []
@@ -104,7 +123,7 @@ def read_document(path):
                 elif node.tag in (ns + 'br', ns + 'cr'):
                     content.append('\n')
             paragraphs.append(''.join(content))
-        return '\n'.join(paragraphs)
+        return _normalize_newlines('\n'.join(paragraphs))
     text = read_text(path)
     if extension == '.srt':
         blocks = re.split(r'\n[ \t]*\n', text)
@@ -113,12 +132,11 @@ def read_document(path):
             lines = block.split('\n')
             if lines and lines[0].strip().isdigit() and len(lines) > 1 and '-->' in lines[1]:
                 lines.pop(0)
-            lines = [re.sub(r'<[^>]+>', '', line) for line in lines if '-->' not in line]
+            lines = [_SRT_TAG.sub('', line) for line in lines if '-->' not in line]
             output.append('\n'.join(lines))
         return reflow_text('\n\n'.join(output))
     if extension == '.lrc':
-        return '\n'.join(re.sub(r'\[(?:\d+:\d+(?:\.\d+)?|(?:ar|ti|al|by|offset):[^\]]*)\]', '', line)
-                         for line in text.split('\n'))
+        return '\n'.join(_LRC_TAG.sub('', line) for line in text.split('\n'))
     # JSON/CSV 保持原始行/空行，避免擅自将结构化数据改写为台词。
     if extension in ('.json', '.csv'):
         return text

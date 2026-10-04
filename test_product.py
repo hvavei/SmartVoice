@@ -353,22 +353,26 @@ class ProductGuiTests(unittest.TestCase):
         status = str(a.status.cget('text'))
         self.assertTrue(status.startswith('已停止 · 已输出完成片段'), status)
 
-    def test_menubar_has_three_menus_and_task_entries(self):
+    def test_menubar_has_four_menus_and_task_entries(self):
         a = self.a
         import tkinter as tk
         menubar = a.root.nametowidget(a.root.cget('menu'))
         labels = [menubar.entrycget(i, 'label') for i in range(menubar.index('end') + 1)]
-        self.assertEqual(labels, ['选项', '组件', '关于'])
+        self.assertEqual(labels, ['选项', '组件', '主题', '关于'])
         project = menubar.nametowidget(menubar.entrycget(0, 'menu'))
         entries = [project.entrycget(i, 'label') for i in range(project.index('end') + 1)
                    if project.type(i) == 'command']
         self.assertNotIn('重试未完成片段', entries)
         self.assertNotIn('清除试听缓存', entries)
         self.assertIn('导出设置…', entries)
-        self.assertIn(str(a._font_bold()[1]), str(project.cget('font')))  # 菜单字号=功能区标题
+        self.assertIn('14', str(project.cget('font')))  # 菜单字号固定 14pt
         comp = menubar.nametowidget(menubar.entrycget(1, 'menu'))
         self.assertEqual(comp.index('end'), 0)
         self.assertEqual(comp.type(0), 'command')
+        themes = menubar.nametowidget(menubar.entrycget(2, 'menu'))
+        theme_labels = [themes.entrycget(i, 'label') for i in range(themes.index('end') + 1)]
+        self.assertEqual(theme_labels, ['暖白·初', '雾蓝'])
+        self.assertIn('14', str(themes.cget('font')))
 
     def test_output_button_points_to_synthesized_file(self):
         import os

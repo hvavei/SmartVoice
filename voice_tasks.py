@@ -46,6 +46,7 @@ class Cancellation:
         self.event.set()
         with self.lock:
             responses = list(self.responses)
+            self.responses.clear()
         # Response.close 可能等待读取锁，不能堵塞 Tk。
         def close():
             for response in responses:
@@ -197,8 +198,7 @@ def fingerprint(text, voice, snap):
     params['ep'] = hashlib.sha256(str(params.get('ep') or '').encode()).hexdigest()
     params['credential_scope'] = hashlib.sha256(str(snap.get('key', '') or '').encode()).hexdigest()
     if snap.get('annotate'):
-        # G2PW 注音可用性参与指纹：装上组件后的旧（未注音）缓存不得继续命中；
-        # 未启用时不加键，保持与历史缓存一致，不做全量失效。
+        # 未启用时兼容旧缓存，启用时通过新增字段区分。
         params['annotate'] = True
     payload = {'revision': 3, 'text': text, 'voice': voice, 'params': params}
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -210,6 +210,7 @@ class SegmentCache:
     def __init__(self, root=None):
         self.root = Path(root or storage.CACHE_DIR / 'segments')
         self._prune_at = 0.0
+        self._prune_lock = threading.Lock()
 
     def load(self, key):
         try:
@@ -230,10 +231,11 @@ class SegmentCache:
 
     def _prune(self):
         """容量控制：最多每分钟扫描一次，按 mtime 淘汰最旧片段；顺带回收孤儿 json/tmp。"""
-        now = time.time()
-        if now - self._prune_at < 60:
-            return
-        self._prune_at = now
+        with self._prune_lock:
+            now = time.time()
+            if now - self._prune_at < 60:
+                return
+            self._prune_at = now
         try:
             pairs = []
             total = 0
@@ -329,6 +331,8 @@ def load_project(path, cache):
             raise ValueError('不是 SmartVoice 项目文件（缺少 project.json）')
         if sum(info.file_size for info in z.infolist()) > 1024**3:
             raise ValueError('项目过大（超过1GB）')
+        if z.getinfo('project.json').file_size > 10 * 1024**2:
+            raise ValueError('项目描述过大（超过10MB）')
         project = json.loads(z.read('project.json'))
         if project.get('format') != 'SmartVoiceProject' or project.get('schema') != 1:
             raise ValueError('不支持的项目格式')
@@ -359,5 +363,7 @@ def load_project(path, cache):
                 raise ValueError('片段指纹无效')
             member = f'segments/{key}.audio'
             if member in names:
+                if z.getinfo(member).file_size > 10 * 1024**2:
+                    raise ValueError('项目片段过大（超过10MB）')
                 cache.save(key, z.read(member))
-    return project
+        return project

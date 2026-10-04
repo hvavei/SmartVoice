@@ -3,6 +3,7 @@
 另支持 --version、--installation-check REPORT_JSON、--install-component NAME ZIP、--port N。
 """
 import argparse
+import appmeta
 
 from appmeta import VERSION
 
@@ -61,10 +62,23 @@ def installation_check(report_path):
             workflow.save_project(project, {'text': 'test', 'slots': [], 'segments': [key]}, cache)
             assert workflow.load_project(project, cache)['text'] == 'test'
         checks.append('dpapi-project-segment-cache')
+        import theme
+        assert set(theme.THEMES) == set(theme.THEME_ORDER) == set(theme.THEME_LABELS)
+        assert theme.THEMES['warm']['FG'] == '#000000'
+        import product_ui
+        import studio_gui
+        assert callable(studio_gui.App.switch_theme)
+        checks.append('theme-and-menu-present')
         result = {'ok': True, 'checks': checks}
     except Exception as e:
-        result = {'ok': False, 'checks': checks, 'error': f'{type(e).__name__}: {e}'}
-    Path(report_path).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+        import re
+        msg = re.sub(r'[A-Za-z]:\\[^"\s]*', '<path>', str(e))
+        result = {'ok': False, 'checks': checks, 'error': f'{type(e).__name__}: {msg[:300]}'}
+    try:
+        Path(report_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(report_path).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    except OSError as e:
+        raise SystemExit(f'无法写入报告 {report_path}: {e}')
     if not result['ok']:
         raise SystemExit(1)
 
@@ -210,6 +224,8 @@ def smoke_test():
             status_code = 200
             headers = {"Content-Type": "audio/mpeg"}
             content = b"ID3" + b"o" * 100
+            def iter_content(self, chunk_size=4096):
+                yield self.content
             def close(self):
                 pass
         return RO()
@@ -231,10 +247,9 @@ def smoke_test():
         class RV:
             status_code = 200
             headers = {"Content-Type": "application/json"}
-            content = b"{}"
-            def json(self):
+            def iter_content(self, chunk_size=4096):
                 import base64
-                return {"data": base64.b64encode(b"ID3volc").decode("ascii")}
+                yield json.dumps({"data": base64.b64encode(b"ID3volc").decode("ascii")}).encode()
             def close(self):
                 pass
         return RV()
@@ -254,21 +269,29 @@ def smoke_test():
     assert engine.parse_dub_script("   \n", ["旁白"]) == []
     ok.append("dub-parse")
     # 4. 转发服务本机实测
-    forward_server._Handler.synth_fn = staticmethod(lambda t, v, r: b"ID3fakeaudio")
-    forward_server._Handler.voices_fn = staticmethod(lambda: [{"name": "t", "id": "x", "lang": "zh-CN"}])
-    from http.server import ThreadingHTTPServer
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), forward_server._Handler)
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    time.sleep(0.5)
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/voices", timeout=10) as r:
-        assert r.status == 200 and "zh-CN" in r.read().decode("utf-8")
-    ok.append("forward-voices")
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/forward?text=hi", timeout=10) as r:
-        assert r.status == 200 and r.read() == b"ID3fakeaudio"
-    ok.append("forward-audio")
-    srv.shutdown()
-    srv.server_close()
+    orig_synth = forward_server._Handler.__dict__['synth_fn']
+    orig_voices = forward_server._Handler.__dict__['voices_fn']
+    srv = None
+    try:
+        forward_server._Handler.synth_fn = staticmethod(lambda t, v, r: b"ID3fakeaudio")
+        forward_server._Handler.voices_fn = staticmethod(lambda: [{"name": "t", "id": "x", "lang": "zh-CN"}])
+        from http.server import ThreadingHTTPServer
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), forward_server._Handler)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        time.sleep(0.5)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/voices", timeout=10) as r:
+            assert r.status == 200 and "zh-CN" in r.read().decode("utf-8")
+        ok.append("forward-voices")
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/forward?text=hi", timeout=10) as r:
+            assert r.status == 200 and r.read() == b"ID3fakeaudio"
+        ok.append("forward-audio")
+    finally:
+        if srv is not None:
+            srv.shutdown()
+            srv.server_close()
+        forward_server._Handler.synth_fn = orig_synth
+        forward_server._Handler.voices_fn = orig_voices
     print("SMOKE PASS: " + ",".join(ok), flush=True)
 
 
@@ -279,14 +302,21 @@ def main():
     ap.add_argument("--installation-check", metavar="REPORT_JSON")
     ap.add_argument('--install-component', nargs=2, metavar=('NAME', 'ZIP'))
     ap.add_argument("--server", action="store_true")
-    ap.add_argument("--port", default="8774")
+    ap.add_argument("--port", type=int, default=appmeta.DEFAULT_PORT, help="端口号")
     args = ap.parse_args()
+    modes = [bool(args.install_component), args.version, args.smoke_test,
+             bool(args.installation_check), args.server]
+    if sum(1 for m in modes if m) > 1:
+        ap.error('--version/--smoke-test/--installation-check/--install-component/--server 只能指定其一')
     if args.install_component:
         import components
         name, archive = args.install_component
         if name not in components.NAMES:
             ap.error('Unknown component')
-        components.install_archive(name, archive)
+        try:
+            components.install_archive(name, archive)
+        except Exception as e:
+            raise SystemExit(f'组件安装失败: {e}')
         return
     if args.version:
         print(VERSION)
@@ -296,6 +326,8 @@ def main():
     if args.installation_check:
         return installation_check(args.installation_check)
     if args.server:
+        if not 1 <= args.port <= 65535:
+            ap.error('端口号必须在 1～65535 之间')
         import engine
         import forward_server
         cfg = engine.load_json(engine.CONFIG_FILE, {})
@@ -341,10 +373,7 @@ def main():
                 voice = table.get(person) or (person if person in table.values() else voice)
             except Exception:
                 pass  # 解析失败回退默认人声，转发服务仍可用
-        try:
-            port = int(args.port)
-        except ValueError:
-            raise SystemExit(f"--port 需要是整数，收到: {args.port!r}")
+        port = args.port
         try:
             forward_server.run_server(port, synth, vlist)
         except OSError as e:

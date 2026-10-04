@@ -27,7 +27,7 @@ _THREAD_SESS = threading.local()
 def _sess():
     """每个合成线程复用连接，避免并发共享 requests.Session 的可变状态。"""
     import requests
-    if _SESS is not None:  # 离线自检的显式替身
+    if _SESS is not None:  # 离线冒烟替身，避免访问真实网络。
         return _SESS
     if not hasattr(_THREAD_SESS, "session"):
         from requests.adapters import HTTPAdapter
@@ -233,10 +233,13 @@ def normalize_region(region):
     return t or DEFAULT_REGION
 
 
+_REGEX_ENDPOINT_REGION = re.compile(r"https?://([a-z0-9]+)\.(tts\.speech|api\.cognitive)", re.IGNORECASE)
+_REGEX_SIGNED_PCT = re.compile(r"^([+-]?)(\d+)%$")
+
+
 def region_of_endpoint(endpoint):
     """从终结点反解region, 如 https://eastasia.tts.speech... -> eastasia."""
-    m = re.search(r"https?://([a-z0-9]+)\.(tts\.speech|api\.cognitive)",
-                  (endpoint or "").strip().lower())
+    m = _REGEX_ENDPOINT_REGION.search((endpoint or "").strip().lower())
     return m.group(1) if m else ""
 
 
@@ -332,6 +335,9 @@ def g2p_phoneme_annotator(text):
     return xml_escape(text)
 
 
+_QUOTE_PATTERN = re.compile(r'(“[^“”]*”|「[^「」]*」|『[^『』]*』|"[^"\n]*")')
+
+
 def format_dialogue_lines(raw_text, slot_names=None):
     """机械分行排版（0猜测）：
     - 引号内对话 -> 独立成行，连同引号原样保留，不加前缀（默认人声，指定角色请标 [角色名]）
@@ -343,7 +349,6 @@ def format_dialogue_lines(raw_text, slot_names=None):
     prefix = f"{names[0]}:" if names else ""
     lines = []
     text = raw_text or ""
-    quote_pattern = re.compile(r'(“[^“”]*”|「[^「」]*」|『[^『』]*』|"[^"\n]*")')
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -359,7 +364,7 @@ def format_dialogue_lines(raw_text, slot_names=None):
             lines.append(line)
             continue
 
-        parts = quote_pattern.split(line)
+        parts = _QUOTE_PATTERN.split(line)
         if len(parts) <= 1:
             lines.append(prefix + line)
             continue
@@ -368,7 +373,7 @@ def format_dialogue_lines(raw_text, slot_names=None):
             p = part.strip()
             if not p:
                 continue
-            if quote_pattern.fullmatch(p):
+            if _QUOTE_PATTERN.fullmatch(p):
                 # 对话保留引号原样：不发明标签，交给默认人声或用户显式 [角色名]
                 lines.append(p)
             else:
@@ -551,18 +556,19 @@ def split_synthesis_text(text, max_chars=MAX_SYNTH_CHARS):
     """优先按句末切块，保留全部字符；超长无标点行按上限切分。"""
     if max_chars < 1:
         raise ValueError("max_chars must be positive")
-    while len(text) > max_chars:
+    pos, total = 0, len(text)
+    while total - pos > max_chars:
         end = 0
         for marks in ("。！？!?；;\n", "，,、 \t"):
-            candidates = [text.rfind(mark, max_chars // 2, max_chars) for mark in marks]
+            candidates = [text.rfind(mark, pos + max_chars // 2, pos + max_chars) for mark in marks]
             if max(candidates) >= 0:
                 end = max(candidates) + 1
                 break
-        end = end or max_chars
-        yield text[:end]
-        text = text[end:]
-    if text:
-        yield text
+        end = end or pos + max_chars
+        yield text[pos:end]
+        pos = end
+    if pos < total:
+        yield text[pos:]
 
 
 def plan_azure_jobs(jobs):
@@ -621,7 +627,7 @@ def parse_dub_script(text, slot_names):
 def _signed_pct(s):
     """'100%'->'+0%' (Azure/Edge 只认带符号的百分比)."""
     t = (s or "").strip()
-    m = re.match(r"^([+-]?)(\d+)%$", t)
+    m = _REGEX_SIGNED_PCT.match(t)
     if not m:
         return "+0%"
     sign, num = m.group(1), int(m.group(2))
@@ -638,7 +644,7 @@ def synth_edge(text, voice_id, rate="+0%", pitch="+0Hz", volume="+0%", attempts=
     if not text:
         raise RuntimeError("文本为空")
     rate = _signed_pct(rate)
-    volume = _signed_pct(volume) if re.match(r"^\d+%$", (volume or "").strip()) else volume
+    volume = _signed_pct(volume) if _REGEX_SIGNED_PCT.match((volume or "").strip()) else volume
 
     def _once():
         async def _run():
@@ -804,8 +810,7 @@ def synth_openai(text, voice_id, key, endpoint="", rate="+0%", attempts=3,
         if on_stage:
             on_stage(f"等待 OpenAI 合成 · 请求 {i}/{attempts}")
         try:
-            r = _sess().post(url, headers=headers, data=payload, timeout=(10, 60),
-                             stream=on_progress is not None)
+            r = _sess().post(url, headers=headers, data=payload, timeout=(10, 60), stream=True)
         except requests.exceptions.ConnectTimeout:
             last_err = f"OpenAI连接超时(第{i}/{attempts}次)"
         except requests.exceptions.ReadTimeout:
@@ -822,7 +827,7 @@ def synth_openai(text, voice_id, key, endpoint="", rate="+0%", attempts=3,
                 if r.status_code == 200 and ("audio" in ctype or "octet-stream" in ctype):
                     if on_stage:
                         on_stage("接收音频")
-                    data = _read_response_bytes(r, on_progress) if on_progress else r.content
+                    data = _read_response_bytes(r, on_progress)
                     if data:
                         return data
                     last_err = f"OpenAI空音频(第{i}/{attempts}次)"
@@ -902,7 +907,7 @@ def synth_volc(text, voice_id, token, appid="", endpoint="", rate="+0%",
         try:
             r = _sess().post(url, headers=headers,
                              data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                             timeout=(10, 60), stream=on_progress is not None)
+                             timeout=(10, 60), stream=True)
         except requests.exceptions.ConnectTimeout:
             last_err = f"火山连接超时(第{i}/{attempts}次)"
         except requests.exceptions.ReadTimeout:
@@ -923,9 +928,9 @@ def synth_volc(text, voice_id, token, appid="", endpoint="", rate="+0%",
                 else:
                     if on_stage:
                         on_stage("接收响应")
-                    raw = _read_response_bytes(r, on_progress) if on_progress else None
+                    raw = _read_response_bytes(r, on_progress)
                     try:
-                        d = json.loads(raw) if raw is not None else r.json()
+                        d = json.loads(raw)
                     except ValueError as e:
                         raise RuntimeError("火山返回非JSON响应，未作为音频保存") from e
                     if not isinstance(d, dict):

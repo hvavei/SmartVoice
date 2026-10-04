@@ -15,10 +15,14 @@ def main():
     args = parser.parse_args()
     if not args.parent.is_dir():
         parser.error('parent must exist')
+    if not args.installer.is_file():
+        parser.error('installer not found')
+    if args.components and not (args.components / 'components.json').is_file():
+        parser.error('components.json not found')
     # 保留日志/验证结果以便审查，只卸载本脚本创建的测试安装。
     work = Path(tempfile.mkdtemp(prefix='installer-check-', dir=args.parent))
-    app = work / 'app'
-    user = work / 'user-data'
+    app = work / 'app space 测试'
+    user = work / 'user data 测试'
     env = dict(os.environ, SMARTVOICE_DATA_DIR=str(user))
     command = [str(args.installer.resolve()), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
                '/NOICONS', '/TASKS=', f'/DIR={app}', f'/LOG={work / "install.log"}']
@@ -36,10 +40,19 @@ def main():
         assert checks['ok'], checks
         if args.components:
             metadata = json.loads((args.components / 'components.json').read_text(encoding='utf-8'))
-            for name, entry in metadata['components'].items():
+            # OCR先装先验，防止G2PW组件的公共依赖掩盖OCR包缺文件。
+            for name in sorted(metadata['components'], key=lambda name: name != 'ocr'):
+                entry = metadata['components'][name]
                 archive = args.components / entry['url'].rsplit('/', 1)[-1]
+                if not archive.is_file():
+                    parser.error(f'component archive not found: {archive.name}')
                 subprocess.run([str(app / 'SmartVoice.exe'), '--install-component', name, str(archive)],
                                check=True, timeout=300, env=env)
+                subprocess.run([str(app / 'SmartVoice.exe'), '--installation-check', str(report)],
+                               check=True, timeout=120, env=env)
+                component_checks = json.loads(report.read_text(encoding='utf-8'))
+                expected = {'ocr': 'pdf-and-ocr-inference', 'g2pw': 'g2pw-model-inference'}[name]
+                assert component_checks['ok'] and expected in component_checks['checks'], component_checks
             subprocess.run([str(app / 'SmartVoice.exe'), '--installation-check', str(report)],
                            check=True, timeout=120, env=env)
             checks = json.loads(report.read_text(encoding='utf-8'))
@@ -59,9 +72,15 @@ def main():
         if unins.is_file():
             subprocess.run([str(unins), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'],
                            check=False, timeout=120)
+            import time
+            for _ in range(100):
+                if not (app / 'SmartVoice.exe').exists() and not (app / '_internal').exists():
+                    break
+                time.sleep(0.1)
     assert (user / 'settings.json').read_bytes() == config
     assert (user / 'exports' / 'keep.txt').is_file()
     assert not (app / 'SmartVoice.exe').exists()
+    assert not (app / '_internal').exists(), 'uninstall left _internal'
     print(json.dumps({'ok': True, 'workdir': str(work), 'checks': checks['checks'],
                       'upgrade_preserves_data': True, 'uninstall_preserves_data': True}, ensure_ascii=True, indent=2))
 

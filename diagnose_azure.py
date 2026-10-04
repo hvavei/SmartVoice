@@ -16,6 +16,12 @@ import engine
 import storage
 
 
+CONNECT_TIMEOUT = 8
+HTTP_SHORT_TIMEOUT = (8, 15)
+HTTP_LONG_TIMEOUT = (8, 30)
+STT_TIMEOUT = (8, 35)
+
+
 def cache_directory(config):
     return storage.CACHE_DIR if Path(config).resolve() == Path(engine.CONFIG_FILE).resolve() else Path(config).parent
 
@@ -24,22 +30,27 @@ def transcribe_samples(config, output):
     """识别诊断生成的短句，辅助定位服务端漏读；ASR 结果不是人工听音结论。"""
     import subprocess
     import docutils
+    Path(output).mkdir(parents=True, exist_ok=True)
     _, key, region, _, _ = configuration(config)
     if not key:
         raise RuntimeError("诊断配置没有 Azure Key")
     rows = []
     for path in sorted(Path(output).glob("*.mp3")):
-        conversion = subprocess.run([docutils._ffmpeg_path(), "-v", "error", "-i", str(path),
-                                     "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
-                                    capture_output=True, check=True,
-                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            conversion = subprocess.run([docutils._ffmpeg_path(), "-v", "error", "-i", str(path),
+                                         "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
+                                        capture_output=True, check=True,
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.CalledProcessError) as e:
+            rows.append({"file": path.name, "error": type(e).__name__, "ms": 0})
+            continue
         t = time.perf_counter()
         try:
             with requests.post(f"https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1",
                                params={"language": "zh-CN"},
                                headers={"Ocp-Apim-Subscription-Key": key,
                                         "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000"},
-                               data=conversion.stdout, timeout=(8, 35)) as r:
+                                data=conversion.stdout, timeout=STT_TIMEOUT) as r:
                 row = {"file": path.name, "status": r.status_code}
                 if r.status_code == 200:
                     try:
@@ -60,7 +71,9 @@ def transcribe_samples(config, output):
 
 
 def configuration(path):
-    cfg = engine.load_json(path, {})
+    raw_cfg = engine.load_json(path, {})
+    cfg = (raw_cfg if Path(path).resolve() == Path(engine.CONFIG_FILE).resolve()
+           else storage.unlock_settings(raw_cfg))
     azure = engine.kind_of(cfg.get("engine", "")) == "azure"
     profile = cfg if azure else cfg.get("engine_profiles", {}).get("azure", {})
     key = os.getenv("AZURE_SPEECH_KEY") or profile.get("key", "")
@@ -78,7 +91,7 @@ def audit_voices(config, output=None):
     _, key, region, _, _ = configuration(config)
     url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/voices/list"
     start = time.perf_counter()
-    with requests.get(url, headers={"Ocp-Apim-Subscription-Key": key}, timeout=(8, 30)) as response:
+    with requests.get(url, headers={"Ocp-Apim-Subscription-Key": key}, timeout=HTTP_LONG_TIMEOUT) as response:
         if response.status_code != 200:
             print(json.dumps({"endpoint": url, "status": response.status_code}))
             return
@@ -122,7 +135,7 @@ def run(config, output, live=False, direct=False, voice_override=None, native_on
         report["dns_ms"] = round((time.perf_counter() - t) * 1000, 1)
         report["address_count"] = len(addresses)
         t = time.perf_counter()
-        with socket.create_connection((host, 443), timeout=8) as sock:
+        with socket.create_connection((host, 443), timeout=CONNECT_TIMEOUT) as sock:
             report["tcp_ms"] = round((time.perf_counter() - t) * 1000, 1)
             t = time.perf_counter()
             with ssl.create_default_context().wrap_socket(sock, server_hostname=host):
@@ -135,7 +148,7 @@ def run(config, output, live=False, direct=False, voice_override=None, native_on
         for _ in range(2):
             t = time.perf_counter()
             try:
-                with session.head(endpoint, timeout=(8, 15), allow_redirects=False) as r:
+                with session.head(endpoint, timeout=HTTP_SHORT_TIMEOUT, allow_redirects=False) as r:
                     heads.append({"http_status": r.status_code, "ms": round((time.perf_counter() - t) * 1000, 1)})
             except requests.RequestException as e:
                 heads.append({"error": type(e).__name__, "ms": round((time.perf_counter() - t) * 1000, 1)})
@@ -158,7 +171,7 @@ def run(config, output, live=False, direct=False, voice_override=None, native_on
                     with session.post(endpoint, data=ssml.encode("utf-8"), headers={
                             "Ocp-Apim-Subscription-Key": key, "Content-Type": "application/ssml+xml",
                             "X-Microsoft-OutputFormat": engine.AZURE_OUTPUT_FORMAT},
-                            timeout=(8, 30), stream=True) as r:
+                            timeout=HTTP_LONG_TIMEOUT, stream=True) as r:
                         sample["headers_ms"] = round((time.perf_counter() - t) * 1000, 1)
                         sample["http_status"] = r.status_code
                         chunks = []

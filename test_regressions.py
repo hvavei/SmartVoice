@@ -1,6 +1,7 @@
 """离线回归：发音标记、原文保真、配置隔离及后台任务生命周期。"""
 import json
 import io
+import sys
 import tempfile
 import wave
 from pathlib import Path
@@ -279,6 +280,18 @@ class EngineTests(unittest.TestCase):
             response.headers = {'Content-Type': 'text/html'}
             with self.assertRaises(RuntimeError):
                 engine.synth_openai('test', 'alloy', 'fake', attempts=1)
+
+    def test_volc_uses_capped_stream_without_progress(self):
+        import base64
+        payload = json.dumps({"data": base64.b64encode(b"ID3v").decode()}).encode()
+        response = Mock(status_code=200, headers={'Content-Type': 'application/json'})
+        response.iter_content.return_value = [payload]
+        session = Mock()
+        session.post.return_value = response
+        with patch.object(engine, '_sess', return_value=session):
+            out = engine.synth_volc('test', 'BV001_streaming', 'tok', 'app1', attempts=1)
+        self.assertEqual(out, b'ID3v')
+        self.assertTrue(session.post.call_args.kwargs['stream'])
 
 
 class DocumentReflowTests(unittest.TestCase):
@@ -564,6 +577,17 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(theme.ACTIVE, "warm")
         from theme import FG
         self.assertEqual(FG, "#000000")
+
+    def test_theme_switch_preserves_manuscript(self):
+        a = self.app
+        try:
+            a._set_real_text('稿件甲')
+            a.switch_theme("mist")
+            self.root.update()
+            self.assertEqual(a._get_real_text(), '稿件甲')
+        finally:
+            a.switch_theme("warm")
+            self.root.update()
 
     def test_parallel_synthesis_is_bounded_and_output_stays_in_order(self):
         import threading
@@ -1295,6 +1319,189 @@ class DeepRegressionTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+    def test_forward_post_empty_voice_rate_normalized(self):
+        import http.client
+        import threading
+        import forward_server
+
+        seen = {}
+
+        def fake_synth(text, voice, rate):
+            seen['voice'] = voice
+            seen['rate'] = rate
+            return b'ID3x'
+
+        prev = forward_server._Handler.synth_fn
+        forward_server._Handler.synth_fn = staticmethod(fake_synth)
+        srv = forward_server.ThreadingHTTPServer(('127.0.0.1', 0), forward_server._Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            conn = http.client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+            conn.request('POST', '/forward', body=json.dumps({"text": "hi", "voice": "", "rate": ""}),
+                         headers={'Content-Type': 'application/json'})
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.read(), b'ID3x')
+            self.assertIsNone(seen['voice'])
+            self.assertEqual(seen['rate'], '+0%')
+            conn.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            forward_server._Handler.synth_fn = prev
+
+    def test_migrate_commits_settings_before_cleaning_source(self):
+        import storage
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            legacy = tmp / 'config.json'
+            legacy.write_text(json.dumps({'engine': 'Azure(Key)', 'key': 'LEGACY-KEY',
+                                          'region': 'eastus', 'endpoint': 'https://x/v1'}),
+                              encoding='utf-8')
+            settings = tmp / 'settings.json'
+            with patch.object(storage, 'SETTINGS_FILE', settings), \
+                    patch.object(storage, 'DATA_DIR', tmp), \
+                    patch.object(storage, 'CACHE_DIR', tmp / 'cache'):
+                storage.migrate_legacy(tmp)
+                self.assertTrue(settings.is_file())
+                cfg = storage.unlock_settings(storage.read_json(settings))
+                self.assertEqual(cfg.get('key'), 'LEGACY-KEY')
+                self.assertTrue(cfg.get('remember_key'))
+                # 旧源明文已清；幂等：再次迁移直接返回，不动已提交配置。
+                storage.migrate_legacy(tmp)
+                self.assertEqual(storage.unlock_settings(storage.read_json(settings)).get('key'),
+                                 'LEGACY-KEY')
+
+    def test_protect_settings_preserves_vault_on_transient_failure(self):
+        import storage
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / 'credentials.json').write_text(json.dumps({'azure': 'OLD-BLOB'}), encoding='utf-8')
+            cfg = {'remember_key': True,
+                   'engine_profiles': {'azure': {'key': '', 'credential_ref': 'azure'}}}
+            with patch.object(storage, 'DATA_DIR', tmp):
+                out = storage.protect_settings(cfg)
+            vault = json.loads((tmp / 'credentials.json').read_text(encoding='utf-8'))
+            self.assertEqual(vault, {'azure': 'OLD-BLOB'})
+            self.assertEqual(out['engine_profiles']['azure'].get('credential_ref'), 'azure')
+
+    def test_load_project_rejects_oversized_members(self):
+        import voice_tasks as workflow
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            for member, size in (('project.json', 11 * 1024**2),):
+                archive = tmp / 'big.smartvoice'
+                with zipfile.ZipFile(archive, 'w') as z:
+                    z.writestr(member, 'x' * size)
+                with self.assertRaisesRegex(ValueError, '过大'):
+                    workflow.load_project(archive, workflow.SegmentCache(tmp / 'cache'))
+
+    def test_prune_throttle_is_thread_safe(self):
+        import threading
+        import voice_tasks as workflow
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = workflow.SegmentCache(Path(tmp) / 'cache')
+            errors = []
+            def storm():
+                try:
+                    for _ in range(20):
+                        cache._prune()
+                except Exception as e:  # noqa: BLE001
+                    errors.append(e)
+            threads = [threading.Thread(target=storm) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            self.assertGreater(cache._prune_at, 0)
+
+    def test_srt_inequality_and_known_tags(self):
+        import documents
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'sample.srt'
+            path.write_text('1\n00:00:01,000 --> 00:00:02,000\n3 < 5 > 2\n\n'
+                            '2\n00:00:03,000 --> 00:00:04,000\n<b>加粗</b>正文\n',
+                            encoding='utf-8')
+            text = documents.read_document(path)
+        self.assertIn('3 < 5 > 2', text)
+        self.assertIn('加粗正文', text)
+        self.assertNotIn('<b>', text)
+
+    def test_lrc_extended_tags_stripped(self):
+        import documents
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'sample.lrc'
+            path.write_text('[LENGTH:03:45]\n[TI:标题]\n[01:02:03.00]歌词\n[00:04.00]第二句\n',
+                            encoding='utf-8')
+            lines = documents.read_document(path).split('\n')
+        self.assertEqual(lines, ['', '', '歌词', '第二句', ''])
+
+    def test_docx_strict_namespace_and_corrupt(self):
+        import documents
+        import zipfile
+        strict = ('<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main">'
+                  '<w:body><w:p><w:r><w:t>严格版</w:t></w:r></w:p></w:body></w:document>')
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            good = tmp / 'strict.docx'
+            with zipfile.ZipFile(good, 'w') as z:
+                z.writestr('word/document.xml', strict)
+            self.assertEqual(documents.read_document(good), '严格版')
+            bad = tmp / 'bad.docx'
+            bad.write_bytes(b'not a zip')
+            with self.assertRaisesRegex(ValueError, '损坏'):
+                documents.read_document(bad)
+            empty = tmp / 'empty.docx'
+            with zipfile.ZipFile(empty, 'w') as z:
+                z.writestr('other.txt', 'x')
+            with self.assertRaises(ValueError):
+                documents.read_document(empty)
+
+    def test_ocr_failure_keeps_text_pages(self):
+        import components
+        import docutils
+        pages = [Mock(), Mock()]
+        for page, text in zip(pages, ('第一页', '')):
+            page.extract_text.return_value = text
+        with patch('pypdf.PdfReader', return_value=Mock(pages=pages)), \
+                patch.object(docutils, '_ocr_pages',
+                             side_effect=components.MissingComponent('缺OCR')):
+            self.assertEqual(docutils.extract_pdf_text('unused', ocr=True), '第一页\n\n')
+        with patch('pypdf.PdfReader', return_value=Mock(pages=[pages[1]])), \
+                patch.object(docutils, '_ocr_pages',
+                             side_effect=components.MissingComponent('缺OCR')):
+            with self.assertRaisesRegex(RuntimeError, 'OCR 不可用'):
+                docutils.extract_pdf_text('unused', ocr=True)
+
+    def test_cli_modes_are_mutually_exclusive(self):
+        import main as entry
+        with patch.object(sys, 'argv', ['SmartVoice', '--version', '--server']):
+            with self.assertRaises(SystemExit) as cm:
+                entry.main()
+            self.assertEqual(cm.exception.code, 2)
+        with patch.object(sys, 'argv', ['SmartVoice', '--version', '--port', '0']):
+            self.assertIsNone(entry.main())  # 端口只约束 --server，不误伤其它模式
+
+    def test_verify_rejects_missing_files(self):
+        import verify_installer
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(sys, 'argv', ['verify_installer.py', 'nope.exe',
+                                            '--parent', tmp]):
+                with self.assertRaises(SystemExit) as cm:
+                    verify_installer.main()
+                self.assertEqual(cm.exception.code, 2)
+
+    def test_installation_check_covers_theme(self):
+        import main as entry
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / 'sub' / 'report.json'
+            self.assertIsNone(entry.installation_check(str(report)))
+            data = json.loads(report.read_text(encoding='utf-8'))
+            self.assertTrue(data['ok'])
+            self.assertIn('theme-and-menu-present', data['checks'])
 
 
 if __name__ == '__main__':

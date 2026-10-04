@@ -75,28 +75,35 @@ def dpapi(data, decrypt=False):
     fn.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p,
                    ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
     fn.restype = wintypes.BOOL
-    if not fn(ctypes.byref(src), None, None, None, None, 1, ctypes.byref(dst)):
-        raise ctypes.WinError(ctypes.get_last_error())
     try:
+        if not fn(ctypes.byref(src), None, None, None, None, 1, ctypes.byref(dst)):
+            raise ctypes.WinError(ctypes.get_last_error())
         return ctypes.string_at(dst.data, dst.size)
     finally:
-        free = ctypes.windll.kernel32.LocalFree
-        free.argtypes = [ctypes.c_void_p]
-        free.restype = ctypes.c_void_p
-        free(dst.data)
+        if dst.data:
+            free = ctypes.windll.kernel32.LocalFree
+            free.argtypes = [ctypes.c_void_p]
+            free.restype = ctypes.c_void_p
+            free(dst.data)
 
 
 def protect_settings(cfg):
     cfg = copy.deepcopy(cfg)
     profiles = cfg.setdefault('engine_profiles', {})
     with _vault_lock:
+        old = read_json(DATA_DIR / 'credentials.json')
+        old = old if isinstance(old, dict) else {}
         vault = {}
         for kind, profile in profiles.items():
             secret = profile.pop('key', '')
-            profile.pop('credential_ref', None)
+            ref = profile.pop('credential_ref', None)
             if cfg.get('remember_key') and secret:
                 vault[kind] = base64.b64encode(dpapi(secret.encode('utf-8'))).decode('ascii')
                 profile['credential_ref'] = kind
+            elif ref and ref in old:
+                # DPAPI 瞬时失败置空了本次 secret：保留盘上尚好的旧条目，不随本次保存销毁凭据。
+                vault[ref] = old[ref]
+                profile['credential_ref'] = ref
         cfg.pop('key', None)
         atomic_json(DATA_DIR / 'credentials.json', vault)
     return cfg
@@ -146,6 +153,8 @@ def migrate_legacy(program_dir):
         if has_secret and not cfg.get('remember_key'):
             cfg['remember_key'] = True
         safe = protect_settings(cfg)
+        # 先提交新配置与凭据库，再清理旧源：两步之间崩溃，下次仍能从旧源重试，不丢 Key。
+        atomic_json(SETTINGS_FILE, safe)
         # 清除旧明文Key与拷贝缓存均为尽力而为：旧目录只读时不阻断迁移。
         try:
             atomic_json(path, safe)
@@ -160,8 +169,6 @@ def migrate_legacy(program_dir):
                     pass
         except OSError:
             pass
-        # 幂等闸门最后写=提交标记：中途失败下次启动可安全重试，不会留下"已迁移一半"状态。
-        atomic_json(SETTINGS_FILE, safe)
         return
 
 
@@ -177,12 +184,13 @@ def unique_export(directory, name, extension, data):
     extension = extension.lower()
     if extension not in ('mp3', 'wav'):
         raise ValueError('仅支持 MP3/WAV')
-    with tempfile.NamedTemporaryFile(dir=directory, delete=False) as f:
-        tmp = Path(f.name)
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
+    tmp = None
     try:
+        with tempfile.NamedTemporaryFile(dir=directory, delete=False) as f:
+            tmp = Path(f.name)
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
         for number in range(10000):
             target = directory / f'{name}{"-" + str(number) if number else ""}.{extension}'
             try:
@@ -204,4 +212,5 @@ def unique_export(directory, name, extension, data):
                     continue
         raise RuntimeError('同名输出过多，请更改文件名')
     finally:
-        tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)

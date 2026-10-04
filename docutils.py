@@ -5,31 +5,43 @@
 - 多人音频：用 ffmpeg 把每段统一解码、重采样到同一采样率/声道，
   再重编码 MP3 拼接，避免字节拼接导致的播放器不兼容与采样率混杂。
 """
+import threading
+
+_OCR = None
+_OCR_LOCK = threading.Lock()
 
 
 def extract_pdf_text(path, ocr=False):
     import pypdf
     reader = pypdf.PdfReader(path)
-    pages = list(reader.pages)
-    pages_text = [""] * len(pages)
-    needs_ocr = []
-    for i, page in enumerate(pages):
-        try:
-            text = page.extract_text(extraction_mode='layout') or ""
-        except TypeError:
-            text = page.extract_text() or ''
-        except Exception:
-            text = ""
-        if text.strip():
-            pages_text[i] = text
-        else:
-            needs_ocr.append(i)
     try:
-        reader.close()  # 文本已提取完，尽早释放整份PDF字节，OCR只用path不再依赖reader
-    except Exception:
-        pass
+        pages = list(reader.pages)
+        pages_text = [""] * len(pages)
+        needs_ocr = []
+        for i, page in enumerate(pages):
+            try:
+                text = page.extract_text(extraction_mode='layout') or ""
+            except TypeError:
+                text = page.extract_text() or ''
+            except Exception:
+                text = ""
+            if text.strip():
+                pages_text[i] = text
+            else:
+                needs_ocr.append(i)
+    finally:
+        try:
+            reader.close()  # 文本已提取完，尽早释放整份PDF字节，OCR只用path不再依赖reader
+        except Exception:
+            pass
     if ocr and needs_ocr:
-        ocr_map = _ocr_pages(path, needs_ocr)
+        try:
+            ocr_map = _ocr_pages(path, needs_ocr)
+        except RuntimeError as e:
+            # 缺组件/模型损坏：已有文本页照常返回，不整篇作废；全空才明确报错。
+            if all(not text for text in pages_text):
+                raise RuntimeError(f'OCR 不可用（{e}），扫描页无法导入') from e
+            ocr_map = {}
         for i in needs_ocr:
             pages_text[i] = ocr_map.get(i, "")
     return "\n\n".join(pages_text)
@@ -42,36 +54,46 @@ def _ocr_pages(path, page_indices):
     result = {}
     with pdfium.PdfDocument(path) as pdf:
         for idx in page_indices:
-            page = pdf[idx]
             try:
-                bitmap = page.render(scale=2.0)
+                page = pdf[idx]
                 try:
-                    with bitmap.to_pil() as img:
-                        out, _ = ocr(np.array(img.convert('RGB'))[:, :, ::-1].copy())
-                    if out:
-                        result[idx] = ocr_paragraphs(out)
+                    bitmap = page.render(scale=2.0)
+                    try:
+                        with bitmap.to_pil() as img:
+                            out, _ = ocr(np.array(img.convert('RGB'))[:, :, ::-1].copy())
+                        if out:
+                            result[idx] = ocr_paragraphs(out)
+                    finally:
+                        bitmap.close()
                 finally:
-                    bitmap.close()
-            finally:
-                page.close()
+                    page.close()
+            except Exception as exc:
+                raise RuntimeError(f'PDF 第 {idx + 1} 页 OCR 失败，导入未完成') from exc
     return result
 
 
 def create_ocr():
-    """显式绑定 OCR 子模块，避免旧版库动态裸导入在冻结程序中失效。"""
-    import components
-    components.activate('ocr')
-    from rapidocr_onnxruntime import RapidOCR
-    from rapidocr_onnxruntime.ch_ppocr_v3_det import TextDetector
-    from rapidocr_onnxruntime.ch_ppocr_v3_rec import TextRecognizer
-    from rapidocr_onnxruntime.ch_ppocr_v2_cls import TextClassifier
+    """显式绑定 OCR 子模块，避免旧版库动态裸导入在冻结程序中失效；进程内单例复用。"""
+    global _OCR
+    if _OCR is not None:
+        return _OCR
+    with _OCR_LOCK:
+        if _OCR is not None:
+            return _OCR
+        import components
+        components.activate('ocr')
+        from rapidocr_onnxruntime import RapidOCR
+        from rapidocr_onnxruntime.ch_ppocr_v3_det import TextDetector
+        from rapidocr_onnxruntime.ch_ppocr_v3_rec import TextRecognizer
+        from rapidocr_onnxruntime.ch_ppocr_v2_cls import TextClassifier
 
-    class PackagedOCR(RapidOCR):
-        @staticmethod
-        def init_module(module_name, class_name):
-            return {'TextDetector': TextDetector, 'TextRecognizer': TextRecognizer,
-                    'TextClassifier': TextClassifier}[class_name]
-    return PackagedOCR()
+        class PackagedOCR(RapidOCR):
+            @staticmethod
+            def init_module(module_name, class_name):
+                return {'TextDetector': TextDetector, 'TextRecognizer': TextRecognizer,
+                        'TextClassifier': TextClassifier}[class_name]
+        _OCR = PackagedOCR()
+        return _OCR
 
 
 def ocr_paragraphs(rows):
@@ -108,7 +130,7 @@ def prepare_playback_audio(data, leading_ms=350, trailing_ms=450, normalize=Fals
     import os
     import tempfile
     from pathlib import Path
-    parts = [data] if isinstance(data, bytes) else list(data)
+    parts = [bytes(data)] if isinstance(data, (bytes, bytearray, memoryview)) else [bytes(p) for p in data]
     if not parts or any(not part for part in parts):
         raise RuntimeError("音频为空或存在空片段，无法完整播放")
     ffmpeg = _ffmpeg_path()
@@ -157,6 +179,8 @@ def _run(ffmpeg, args):
     try:
         p = subprocess.run([ffmpeg] + args, capture_output=True, timeout=600,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except FileNotFoundError:
+        raise RuntimeError('FFmpeg 缺失，无法合成音频') from None
     except subprocess.TimeoutExpired:
         raise RuntimeError('ffmpeg 超时（超过10分钟）已中止，请检查输入音频是否异常') from None
     if p.returncode != 0:

@@ -90,13 +90,20 @@ def _wizard(base, size, with_text=True):
 
 
 def prepare(source, destination):
+    import os
+    import tempfile
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     base = _load_square(source)
-    _frame(base, (512, 512)).save(destination / 'smartvoice.png', optimize=True)
-    _save_ico(destination / 'smartvoice.ico', base)
-    _wizard(base, WIZARD_SIZE).save(destination / 'wizard-image.bmp', 'BMP')
-    _wizard(base, WIZARD_SMALL_SIZE, with_text=False).save(destination / 'wizard-small.bmp', 'BMP')
+    # 先写临时文件再原子替换：中断不留半截图标，下次构建不误用坏图。
+    with tempfile.TemporaryDirectory(dir=destination) as tmp:
+        tmp = Path(tmp)
+        _frame(base, (512, 512)).save(tmp / 'smartvoice.png', optimize=True)
+        _save_ico(tmp / 'smartvoice.ico', base)
+        _wizard(base, WIZARD_SIZE).save(tmp / 'wizard-image.bmp', 'BMP')
+        _wizard(base, WIZARD_SMALL_SIZE, with_text=False).save(tmp / 'wizard-small.bmp', 'BMP')
+        for name in ('smartvoice.png', 'smartvoice.ico', 'wizard-image.bmp', 'wizard-small.bmp'):
+            os.replace(tmp / name, destination / name)
 
 
 if __name__ == '__main__':

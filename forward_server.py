@@ -21,6 +21,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
@@ -31,6 +32,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
@@ -61,7 +63,7 @@ class _Handler(BaseHTTPRequestHandler):
         if u.path == "/forward":
             return self._forward(q.get("text", [""])[0],
                                  q.get("voice", [""])[0] or None,
-                                 q.get("rate", ["+0%"])[0])
+                                 q.get("rate", ["+0%"])[0] or "+0%")
         if u.path == "/":
             return self._json({"service": "SmartVoice forward",
                                "usage": "/forward?text=你好&voice=zh-CN-YunxiNeural&rate=+0%",
@@ -84,7 +86,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad json"}, 400)
         if not isinstance(body, dict):
             return self._json({"error": "expected JSON object"}, 400)
-        return self._forward(body.get("text", ""), body.get("voice"), body.get("rate", "+0%"))
+        return self._forward(body.get("text", ""), body.get("voice") or None,
+                               body.get("rate", "+0%") or "+0%")
 
     def log_message(self, fmt, *args):
         pass
