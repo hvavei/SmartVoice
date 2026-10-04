@@ -12,6 +12,7 @@ import appmeta
 import engine
 import storage
 import voice_tasks as workflow
+from ui.dialogs import open_component_manager, open_export_settings
 from ui.menus import build_product_menu
 from theme import ACCENT, BG, BORDER, FG, PANEL, ROLE, SEL, WARN
 import theme
@@ -365,46 +366,7 @@ class ProductUI:
                 var.set(values[k])
 
     def export_settings(self):
-        existing = getattr(self, '_export_win', None)
-        if existing is not None and existing.winfo_exists():
-            existing.lift()
-            return
-        top = tk.Toplevel(self.root)
-        self._export_win = top
-        top.title('SmartVoice · 导出设置')
-        top.configure(bg=BG)
-        for row, (label, var) in enumerate((('输出目录', self.export_dir), ('文件名', self.export_name),
-                                           ('开头留白(ms)', self.leading_ms), ('结尾留白(ms)', self.trailing_ms))):
-            ttk.Label(top, text=label).grid(row=row, column=0, padx=8, pady=6)
-            ent = ttk.Entry(top, textvariable=var, width=48)
-            ent.grid(row=row, column=1, padx=8, pady=6)
-            self._bind_entry_context_menu(ent)
-        def browse():
-            path = filedialog.askdirectory(parent=top)
-            if path:
-                self.export_dir.set(path)
-        ttk.Button(top, text='选择目录', command=browse).grid(row=0, column=2)
-        ttk.Combobox(top, textvariable=self.export_format, values=['mp3', 'wav'], state='readonly').grid(row=4, column=1)
-        ttk.Checkbutton(top, text='响度均衡（整条音频目标 -18 LUFS / 峰值 -1.5 dBTP）', variable=self.normalize_var).grid(row=5, columnspan=3, padx=8)
-        ttk.Label(top, text='均衡会调整整体增益和动态范围，不改变文字、音高或时长；默认关闭。').grid(row=6, columnspan=3, padx=8, pady=8)
-        def save():
-            try:
-                self._export_options()
-                self._save_cfg()
-                top.destroy()
-            except (ValueError, tk.TclError) as e:
-                messagebox.showerror('设置无效', str(e), parent=top)
-        opened = self._export_options_safe()
-
-        def dismiss():
-            # 直接关窗：合法则保留改动，非法则恢复进入对话框时的可用值。
-            try:
-                self._export_options()
-            except (ValueError, tk.TclError):
-                self._apply_export_options(opened)
-            top.destroy()
-        top.protocol('WM_DELETE_WINDOW', dismiss)
-        ttk.Button(top, text='保存', command=save).grid(row=7, column=1, pady=8)
+        open_export_settings(self)
 
     def open_last_export(self):
         if self._last_export and Path(self._last_export).is_file():
@@ -434,100 +396,7 @@ class ProductUI:
         self._watch_play(self._seq)
 
     def component_manager(self):
-        import components
-        import queue
-        import threading
-        existing = getattr(self, '_component_win', None)
-        if existing is not None and existing.winfo_exists():
-            existing.lift()
-            return
-        top = tk.Toplevel(self.root)
-        self._component_win = top
-        top.title('SmartVoice · 增强组件')
-        top.geometry('650x300')
-        top.resizable(False, False)
-        top.configure(bg=BG)
-        ttk.Label(top, text='标准版可选安装；完整版已包含。安装包与组件必须为相同版本/架构。').pack(padx=12, pady=12)
-        progress = ttk.Progressbar(top, maximum=100)
-        progress.pack(side='bottom', fill='x', padx=12, pady=8)
-        info = ttk.Label(top, text='准备就绪', wraplength=620)
-        info.pack(side='bottom', fill='x', padx=12, pady=8)
-        messages, cancel = queue.Queue(), threading.Event()
-        active = [False]
-        closing = [False]
-        labels, buttons = {}, []
-        def update_status():
-            for name, label in labels.items():
-                label.config(text='已包含/已安装' if components.available(name) else '未安装')
-        def start(name, local=False):
-            if active[0]:
-                return
-            path = filedialog.askopenfilename(parent=top, filetypes=[('SmartVoice组件', '*.zip')]) if local else None
-            if local and not path:
-                return
-            if not local and not messagebox.askokcancel('下载增强组件',
-                    '将从 SmartVoice GitHub Releases 下载组件并校验SHA-256。G2PW包较大，是否继续？', parent=top):
-                return
-            active[0] = True
-            cancel.clear()
-            for button in buttons:
-                button.state(['disabled'])
-            def report(cur, total, phase):
-                messages.put(('progress', (cur, total, phase)))
-            def work():
-                try:
-                    if local:
-                        components.install_archive(name, path, report, cancel)
-                    else:
-                        components.download(name, report, cancel)
-                    messages.put(('done', '组件已安装。若更新了已经加载的组件，请重启 SmartVoice。'))
-                except Exception as e:
-                    messages.put(('done', str(e)))
-            threading.Thread(target=work, daemon=True).start()
-        for name, title in components.NAMES.items():
-            row = ttk.Frame(top)
-            row.pack(fill='x', padx=12, pady=6)
-            ttk.Label(row, text=title, width=24).pack(side='left')
-            labels[name] = ttk.Label(row, width=16)
-            labels[name].pack(side='left')
-            for caption, local in (('下载/安装', False), ('本地导入', True)):
-                button = ttk.Button(row, text=caption, command=lambda n=name, l=local: start(n, l))
-                button.pack(side='left', padx=3)
-                buttons.append(button)
-        update_status()
-        def poll():
-            if not top.winfo_exists():
-                return
-            try:
-                for _ in range(200):
-                    kind, payload = messages.get_nowait()
-                    if kind == 'progress':
-                        cur, total, phase = payload
-                        progress['value'] = cur * 100 / max(1, total)
-                        info.config(text=f'{phase}：{cur}/{total}')
-                    else:
-                        active[0] = False
-                        info.config(text=payload)
-                        update_status()
-                        for button in buttons:
-                            button.state(['!disabled'])
-                        if closing[0]:
-                            top.destroy()
-                            return
-            except queue.Empty:
-                pass
-            if top.winfo_exists():
-                top.after(100, poll)
-
-        def close():
-            if active[0]:
-                cancel.set()
-                closing[0] = True
-                info.config(text='正在取消下载/解包，稍后自动关闭…')
-            else:
-                top.destroy()
-        top.protocol('WM_DELETE_WINDOW', close)
-        poll()
+        open_component_manager(self)
 
     def copy_diagnostics(self):
         data = self._diag.snapshot() if self._diag else {'software': appmeta.NAME, 'version': appmeta.VERSION, 'state': '尚无合成任务'}
