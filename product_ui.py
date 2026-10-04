@@ -122,6 +122,38 @@ class ProductUI:
         except tk.TclError:
             pass  # 定时回调到达时，编辑窗口或主界面可能已经销毁。
 
+    @staticmethod
+    def _damage_range(old, new):
+        """新旧序列 diff 出损伤区；返回 (start, end_old, end_new)，新区为新序列半区。
+        既用于文本行定区，也用于标注比对。Tk 标签随编辑自动移位，区外天然正确。"""
+        n = min(len(old), len(new))
+        start = 0
+        while start < n and old[start] == new[start]:
+            start += 1
+        end_old, end_new = len(old), len(new)
+        while end_old > start and end_new > start and old[end_old - 1] == new[end_new - 1]:
+            end_old -= 1
+            end_new -= 1
+        return start, end_old, end_new
+
+    @staticmethod
+    def _parse_speaker_lines(lines, names):
+        """逐行求标注四元组 (tag|None, end|None, name|None, isempty)，供统计与打标签共用。"""
+        infos = []
+        for line in lines:
+            isempty = not line.strip()
+            m = re.match(r'^\s*(?:\[([^\]]+)\]|([^:：\s]{1,12})[:：])', line)
+            if not m:
+                infos.append((None, None, None, isempty))
+                continue
+            name = (m.group(1) or m.group(2)).strip()
+            if m.group(1) is None and name not in names:
+                infos.append((None, None, None, isempty))
+                continue
+            tag = f'speaker_{names[name]}' if name in names else 'speaker_missing'
+            infos.append((tag, m.end(), name if tag == 'speaker_missing' else None, isempty))
+        return infos
+
     def _update_editor_info(self):
         if not hasattr(self, 'editor_info'):
             return
@@ -131,33 +163,47 @@ class ProductUI:
         colors = ROLE
         signature = (self.text, raw, tuple(names.items()))
         if signature != getattr(self, '_editor_highlight_signature', None):
-            for tag in self.text.tag_names():
-                if tag.startswith('speaker_'):
-                    self.text.tag_remove(tag, '1.0', 'end')
-            missing, ranges = set(), {}
-            paragraphs = 0
-            for n, line in enumerate(raw.split('\n'), 1):
-                paragraphs += bool(line.strip())
-                m = re.match(r'^\s*(?:\[([^\]]+)\]|([^:：\s]{1,12})[:：])', line)
-                if not m:
-                    continue
-                name = (m.group(1) or m.group(2)).strip()
-                if m.group(1) is None and name not in names:
-                    continue
-                tag = f'speaker_{names[name]}' if name in names else 'speaker_missing'
-                if name not in names:
-                    missing.add(name)
-                ranges.setdefault(tag, []).extend((f'{n}.0', f'{n}.{m.end()}'))
-            for tag, indices in ranges.items():
-                if tag == 'speaker_missing':
-                    self.text.tag_configure(tag, underline=True, foreground=WARN)
+            new_lines = raw.split('\n')
+            cached = getattr(self, '_editor_highlight_cache', None)
+            if cached is None or cached[0] is not self.text or cached[1] != tuple(names.items()):
+                infos = self._parse_speaker_lines(new_lines, names)
+                merged, region = infos, (0, len(new_lines))
+            else:
+                start, end_old, end_new = self._damage_range(cached[2], new_lines)
+                region_infos = self._parse_speaker_lines(new_lines[start:end_new], names)
+                if region_infos == cached[3][start:end_old]:
+                    # 损伤区标注语义无变化（如旁白行内打字）：复用旧标注，零 Tcl、零统计。
+                    merged, region = cached[3], None
+                    paragraphs, missing = cached[4]
                 else:
-                    self.text.tag_configure(tag, background=colors[int(tag[8:]) % len(colors)])
-                for start in range(0, len(indices), 512):
-                    self.text.tag_add(tag, *indices[start:start + 512])
-            self.text.tag_raise('sel')
+                    merged = cached[3][:start] + region_infos + cached[3][end_old:]
+                    region = (start, end_new)
+            if region is not None:
+                paragraphs = sum(1 for e in merged if e[3])
+                missing = {e[2] for e in merged if e[0] == 'speaker_missing'}
+                start, end_new = region
+                if end_new > start:
+                    for tag in self.text.tag_names():
+                        if tag.startswith('speaker_'):
+                            self.text.tag_remove(tag, f'{start + 1}.0', f'{end_new}.end')
+                    ranges = {}
+                    for n, info in enumerate(merged[start:end_new], start + 1):
+                        if info[0] is None:
+                            continue
+                        tag, end_col = info[0], info[1]
+                        ranges.setdefault(tag, []).extend((f'{n}.0', f'{n}.{end_col}'))
+                    for tag, indices in ranges.items():
+                        if tag == 'speaker_missing':
+                            self.text.tag_configure(tag, underline=True, foreground=WARN)
+                        else:
+                            self.text.tag_configure(tag, background=colors[int(tag[8:]) % len(colors)])
+                        for at in range(0, len(indices), 512):
+                            self.text.tag_add(tag, *indices[at:at + 512])
+                    self.text.tag_raise('sel')
             self._editor_highlight_signature = signature
             self._editor_highlight_stats = (paragraphs, missing)
+            self._editor_highlight_cache = (self.text, tuple(names.items()), new_lines, merged,
+                                            (paragraphs, missing))
         paragraphs, missing = self._editor_highlight_stats
         line = self._editor_target().get('insert linestart', 'insert lineend')
         m = re.match(r'^\s*(?:\[([^\]]+)\]|([^:：\s]{1,12})[:：])', line)

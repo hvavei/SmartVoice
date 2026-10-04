@@ -168,6 +168,31 @@ class EditorRefreshTests(unittest.TestCase):
         self.assertEqual(app.text.tag_ranges('speaker_0'), ())
         self.assertIn('未绑定', app.editor_role.cget('text'))
 
+    def test_typing_inside_narration_skips_tag_updates(self):
+        app = self.app
+        app.text.insert('1.0', '[旁白]你好\n这是旁白。\n[旁白]再见\n')
+        app._refresh_editor_info()
+        before = app.text.tag_ranges('speaker_0')
+        self.assertEqual(len(before), 4)
+        with patch.object(app.text, 'tag_add', wraps=app.text.tag_add) as add, \
+                patch.object(app.text, 'tag_remove', wraps=app.text.tag_remove) as remove:
+            app.text.insert('2.3', 'X')  # 旁白行内打字：标注语义不变
+            app._refresh_editor_info()
+            add.assert_not_called()
+            remove.assert_not_called()
+        self.assertEqual(app.text.tag_ranges('speaker_0'), before)
+
+    def test_role_bracket_edit_retags_only_damage_region(self):
+        app = self.app
+        app.text.insert('1.0', '[旁白]一\n[旁白]二\n[旁白]三\n')
+        app._refresh_editor_info()
+        with patch.object(app.text, 'tag_add', wraps=app.text.tag_add) as add:
+            app.text.delete('2.1', '2.2')  # [旁白] -> [白]：未绑定
+            app._refresh_editor_info()
+            self.assertEqual(add.call_count, 1)  # 只加 speaker_missing 一次
+        self.assertEqual(tuple(map(str, app.text.tag_ranges('speaker_0'))), ('1.0', '1.4', '3.0', '3.4'))
+        self.assertEqual(len(app.text.tag_ranges('speaker_missing')), 2)
+
     def test_progress_redraw_survives_widget_recreation(self):
         app = self.app
         app._prog_ui = {'maximum': 100, 'value': 50}
