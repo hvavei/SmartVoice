@@ -22,6 +22,7 @@ import appmeta
 import storage
 import theme
 from config_store import ConfigStore
+from ui.serverbar import build_serverbar
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
@@ -548,13 +549,7 @@ class App(ProductUI):
         self._refresh_style_state()
 
     def _setup_f6(self, f6):
-        # 端口输入由 _reflow 统一布点，此处只创建控件。
-        ttk.Label(f6, text="端口:")
-        self.port_entry = ttk.Entry(f6, textvariable=self.port_var, width=8, justify="center")
-        self._bind_entry_context_menu(self.port_entry)
-        self.server_btn = self._mkbtn(f6, "停止转发" if self.server else "启动转发", self.toggle_server)
-        self.server_lab = ttk.Label(f6, text="运行中" if self.server else "未启动", foreground=FEEDBACK)
-        self._flowbar(f6)
+        build_serverbar(self, f6)
 
     def _setup_f5(self, f5):
         buttons = (
