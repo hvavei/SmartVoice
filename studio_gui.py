@@ -1,8 +1,7 @@
 """SmartVoice 主界面：多引擎、项目编辑、可恢复配音任务。"""
 
 BTN_W = 16  # 标准功能按钮宽度(字符数)
-SLOT_AUD_W = 6   # 配音卡片内试听小按钮统一宽
-MAX_DUB = 9      # 最多9人配音
+# SLOT_AUD_W/MAX_DUB/FILTERS/gender_of 随面板搬入 ui 包，此处经由 import 重导出以兼容旧引用。
 import os
 import queue
 import re
@@ -27,6 +26,8 @@ from ui.toolbar import build_toolbar
 from ui.configbar import build_configbar, ZOOMS
 from ui.stylepanel import build_stylepanel
 from ui.editor import build_editor
+from ui.voicepanel import FILTERS, build_voicepanel
+from ui.dubpanel import MAX_DUB, SLOT_AUD_W, build_dubpanel, gender_of
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
@@ -142,17 +143,9 @@ def safe_name(s):
     return re.sub(r"[^A-Za-z0-9_\-]+", "_", s)[:60]
 
 
-def gender_of(display):
-    return "女" if "女" in display else ("男" if "男" in display else "")
-
-
 def loc_of(short):
     p = short.split("-")
     return "-".join(p[:2]) if len(p) >= 2 else short
-
-
-FILTERS = ["全部", "大陆中文zh-CN", "港中文zh-HK", "台中文zh-TW",
-           "粤语", "英文en", "日语ja", "韩语ko", "其他语种"]
 
 
 def want_voice(filter_name, short):
@@ -510,48 +503,8 @@ class App(ProductUI):
     def _setup_f4(self, f4, IX, IY):
         build_editor(self, f4, IX, IY, AUDITION_TEXT)
     def _setup_f3_content(self, voice_box, dub_box, IX, IY):
-        # 原 voice_box 内容构建
-        bar = ttk.Frame(voice_box)
-        bar.pack(fill="x", padx=IX, pady=IY)
-        self.b_refresh = self._mkbtn(bar, "刷新", self.on_refresh, width=6)
-        self.b_refresh.grid(row=0, column=0, padx=2)
-        self.fb = ttk.Combobox(bar, textvariable=self.filter_var, values=FILTERS, state="readonly", width=12)
-        self.fb.grid(row=0, column=1, padx=2, sticky="ew")
-        self.fb.bind("<<ComboboxSelected>>", lambda e: self.rebuild_list())
-        self.lab_gender = ttk.Label(bar, text="性别:")
-        self.lab_gender.grid(row=0, column=2, padx=2)
-        self.gb = ttk.Combobox(bar, textvariable=self.gender_var, values=["全部", "男", "女"], state="readonly", width=6)
-        self.gb.grid(row=0, column=3, padx=2, sticky="ew")
-        bar.columnconfigure(1, weight=2)
-        bar.columnconfigure(3, weight=1)
-        self.gb.bind("<<ComboboxSelected>>", lambda e: self.rebuild_list())
-        
-        wrap = ttk.Frame(voice_box)
-        wrap.pack(fill="both", expand=True, padx=IX, pady=IY)
-        self.tree = ttk.Treeview(wrap, columns=("gender", "name", "vid"), show="headings", selectmode="browse", height=9)
-        # 显式重置并强制居中
-        self.tree.heading("gender", text="性别", anchor="center")
-        self.tree.heading("name", text="名称", anchor="center")
-        self.tree.heading("vid", text="代号", anchor="center")
-        
-        for column, width in (("gender", 46), ("name", 120), ("vid", 160)):
-            self.tree.column(column, width=width, minwidth=1, anchor="center", stretch=False)
-        self.voice_scrollbar = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=self.voice_scrollbar.set)
-        # 滚动条独占不收缩的一列，表格只使用剩余宽度。
-        wrap.columnconfigure(0, weight=1)
-        wrap.columnconfigure(1, weight=0)
-        wrap.rowconfigure(0, weight=1)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        self.voice_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.tree.bind("<Configure>", self._resize_voice_columns)
-        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-        self.tree.bind("<Double-1>", self._on_tree_audition)
-        self.tree.bind('<Button-1>', self._block_column_resize, add='+')
-        self.tree.bind('<B1-Motion>', self._block_column_resize, add='+')
-        
-        # 原 dub_box 内容构建
-        self._build_dub(dub_box, IX, IY)
+        build_voicepanel(self, voice_box, IX, IY)
+        build_dubpanel(self, dub_box, IX, IY)
 
     def _resize_voice_columns(self, event):
         # 按实际视口分配列宽，避免固定 minwidth 总和超过窄窗宽度。
@@ -1856,103 +1809,6 @@ class App(ProductUI):
         return "break"
 
     # ---- 多人配音(独立面板, 最多9人): 文本按 `角色名:台词` / `[角色名]台词` 分派 ----
-    def _build_dub(self, parent, IX, IY):
-        box = parent
-        box.config(text="")
-        title_frame = ttk.Frame(box)
-        shadow_box, self.dub_title = self._title_widget(title_frame, "多人配音（最多9人）")
-        shadow_box.pack(side="left")
-        self.dub_format_hint = ttk.Label(title_frame, text=" 格式：角色：台词",
-                                         font=self._font(), foreground=FEEDBACK)
-        self.dub_format_hint.pack(side="left")
-        box.configure(labelwidget=title_frame, labelanchor="nw")
-        head = ttk.Frame(box)
-        head.pack(fill="x", padx=IX, pady=IY)
-        
-        self._mkbtn(head, "角色分配", self.on_format_dialogue_lines, width=8).pack(side="left", padx=2)
-        self._mkbtn(head, "角色重置", self.reset_roles, width=8).pack(side="left", padx=2)
-        scroll = ttk.Frame(box)
-        scroll.pack(fill="both", expand=True, padx=IX, pady=(0, IY))
-        self.dub_canvas = tk.Canvas(scroll, bg=BG, highlightthickness=0, bd=0)
-        dub_sb = ttk.Scrollbar(scroll, orient="vertical", command=self.dub_canvas.yview)
-        self.dub_canvas.configure(yscrollcommand=dub_sb.set)
-        dub_sb.pack(side="right", fill="y")
-        self.dub_canvas.pack(side="left", fill="both", expand=True)
-        self.dub_body = ttk.Frame(self.dub_canvas)
-        self._dub_window = self.dub_canvas.create_window((0, 0), window=self.dub_body, anchor="nw")
-        self.dub_body.bind("<Configure>", lambda e: self.dub_canvas.configure(
-            scrollregion=self.dub_canvas.bbox("all")))
-        self.dub_canvas.bind("<Configure>", lambda e: self.dub_canvas.itemconfigure(
-            self._dub_window, width=e.width))
-        self._dub["slots"] = []
-        # 多人配音下拉人声：只展示 性别 + 代号 (如: 女 zh-CN-XiaoxiaoNeural)
-        slot_items = []
-        for disp, vid in self.voices.items():
-            g = gender_of(disp) or "中"
-            slot_items.append(f"{g} {vid}")
-
-        for i in range(MAX_DUB):
-            cfg = self.dub_cfg[i]
-            card = ttk.Frame(self.dub_body)
-            on_v = tk.BooleanVar(value=cfg["on"])
-            name_v = tk.StringVar(value=cfg["name"])
-            # 人声显示区是 Combobox，与左侧可编辑的角色名称 Entry 独立。
-            cb_voice = ttk.Combobox(card, values=slot_items, width=15,
-                                    justify="left", state="readonly")
-            cb_voice.configure(postcommand=lambda cb=cb_voice: self._center_voice_dropdown(cb))
-            
-            # 回显匹配
-            cur_saved = cfg.get("voice", "")
-            matched = next((item for item in slot_items if cur_saved and (item == cur_saved or item.split()[-1] == self.voices.get(cur_saved, cur_saved))), None)
-            if matched:
-                cb_voice.set(matched)
-            elif cur_saved:
-                cb_voice.set(cur_saved)
-            elif slot_items:
-                cur_vid = self.voices.get(self.selected, "")
-                def_matched = next((item for item in slot_items if item.endswith(cur_vid)), slot_items[0])
-                cb_voice.set(def_matched)
-            
-            # 精巧正方形色块，带细灰色描边
-            box_sz = max(14, round(16 * self._zx()))
-            color_cv = tk.Canvas(card, width=box_sz, height=box_sz, bg=BG, highlightthickness=0, bd=0)
-            color_cv.grid(row=0, column=0, padx=(2, 4))
-            
-            def _update_color(var=on_v, cv=color_cv, sz=box_sz):
-                try:
-                    cv.delete("all")
-                    fill_col = GREEN if var.get() else TOGGLE_OFF
-                    cv.create_rectangle(1, 1, sz - 1, sz - 1, fill=fill_col, outline=OUTLINE, width=1)
-                except tk.TclError:
-                    pass
-            _update_color()
-            color_cv.bind("<Button-1>", lambda e, v=on_v, c=_update_color: (v.set(not v.get()), c(), self._save_cfg()))
-            
-            # 角色名称输入框宽度调整为 8，文字居中；失焦或清空时自动恢复默认名称
-            ent = ttk.Entry(card, textvariable=name_v, width=8, justify="center")
-            ent.grid(row=0, column=1, padx=2)
-            self._bind_entry_context_menu(ent)
-            def _on_name_focus_out(e, idx=i, var=name_v):
-                if not var.get().strip():
-                    default_name = "旁白" if idx == 0 else f"角色{idx + 1}"
-                    var.set(default_name)
-                    self._save_cfg()
-            ent.bind("<FocusOut>", _on_name_focus_out)
-            
-            cb_voice.grid(row=0, column=2, sticky='ew', padx=2)
-            card.columnconfigure(2, weight=1)
-            self._mkbtn(card, "试听", lambda k=i: self.on_slot_audition(k), width=SLOT_AUD_W).grid(
-                row=0, column=3, padx=2)
-            cb_voice.bind('<Configure>', lambda e: e.widget.xview_moveto(0))
-            name_v.trace_add("write", lambda *a: self._save_cfg())
-            cb_voice.bind("<<ComboboxSelected>>", lambda e: self._save_cfg())
-            self._dub["slots"].append({"on": on_v, "name": name_v, "combo": cb_voice, "update_color": _update_color})
-        # 槽位紧凑纵向排列，右侧固定宽度且不会因窗口变窄被挤掉。
-        for i, child in enumerate(self.dub_body.winfo_children()):
-            child.grid(row=i, column=0, sticky="ew", pady=1)
-        self.dub_body.columnconfigure(0, weight=1)
-        self._dub["box"] = box
-
     @staticmethod
     def _center_voice_dropdown(combo):
         """选中显示区和弹出列表分别对齐；Tk 9 支持 Listbox.justify。"""
