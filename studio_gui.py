@@ -26,6 +26,7 @@ from ui.serverbar import build_serverbar
 from ui.toolbar import build_toolbar
 from ui.configbar import build_configbar, ZOOMS
 from ui.stylepanel import build_stylepanel
+from ui.editor import build_editor
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
@@ -507,35 +508,7 @@ class App(ProductUI):
         build_toolbar(self, f5)
 
     def _setup_f4(self, f4, IX, IY):
-        title_row = ttk.Frame(f4)
-        shadow, title = self._title_widget(title_row, "文本")
-        shadow.pack(side="left")
-        self.prog_wrap = ttk.Frame(title_row)
-        self.prog_wrap.pack(side="left", padx=(8, 0))
-        f4.configure(labelwidget=title_row)
-        self.prog = tk.Canvas(self.prog_wrap, width=max(120, round(150 * self._zx())),
-                               height=max(9, round(11 * self._zx())), bg=PANEL,
-                              highlightthickness=1, highlightbackground=BORDER, bd=0)
-        self.prog.bind("<Configure>", lambda e: self._prog_draw())
-        self.prog_lab = ttk.Label(self.prog_wrap, text="", anchor="w", foreground=FEEDBACK)
-        self._prog_ui = {"mode": "determinate", "value": 0, "maximum": 100}
-        self.text = tk.Text(f4, height=3, undo=True, autoseparators=True, maxundo=5000, bg=PANEL, fg=FG, insertbackground=FG,
-                            font=self._font(), relief="flat", borderwidth=0, wrap="word",
-                            highlightthickness=1, highlightbackground=BORDER,
-                            highlightcolor=ACCENT, padx=max(8, round(10 * self._zx())),
-                            pady=max(4, round(6 * self._zx())))
-        self.text.pack(fill="x", padx=IX, pady=IY)
-        self._setup_placeholder(AUDITION_TEXT)
-        self._bind_text_context_menu()
-        self.editor_info = ttk.Frame(f4)
-        self.editor_info.pack(fill='x', padx=IX)
-        self.editor_role = ttk.Label(self.editor_info, text='0字 · 0段 · 当前角色：默认人声', foreground=FEEDBACK)
-        self.editor_role.pack(side='left')
-        self.play_time = ttk.Label(self.editor_info, text='00:00 / 00:00', foreground=FEEDBACK)
-        self.play_time.pack(side='left', padx=(12, 0))
-        self._bind_editor(self.text)
-        self.text.bind('<Double-Button-1>', self._open_editor_double_click)
-        
+        build_editor(self, f4, IX, IY, AUDITION_TEXT)
     def _setup_f3_content(self, voice_box, dub_box, IX, IY):
         # 原 voice_box 内容构建
         bar = ttk.Frame(voice_box)
