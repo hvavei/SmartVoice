@@ -21,6 +21,7 @@ import engine
 import appmeta
 import storage
 import theme
+from config_store import ConfigStore
 import voice_tasks as workflow
 from product_ui import ProductUI, cfg_bool, cfg_int
 from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
@@ -168,9 +169,13 @@ class App(ProductUI):
         self._audition_cache = OrderedDict()
         self._audition_cache_lock = threading.Lock()
         self._synth_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts")
-        self._cfg_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="config")
-        self._cfg_after = None
-        self._cfg_pending = None
+        self._config_store = ConfigStore(
+            save_fn=lambda cfg: engine.save_json(engine.CONFIG_FILE, cfg),
+            schedule_fn=lambda ms, cb: self.root.after(ms, cb),
+            cancel_fn=self.root.after_cancel,
+            # 只入队（线程安全）；唤醒轮询必须在主线程做，见 _flush_cfg。
+            report_fn=lambda tag, err: self._bgq.put((tag, None, err)),
+        )
         self.server = None
         self.busy = False
         self._seq = 0
@@ -241,7 +246,7 @@ class App(ProductUI):
         self._prog_cancel()
         self._save_cfg()      # 捕获退出前的最后修改（如刚输入的Key/端口）
         self._flush_cfg()
-        self._cfg_pool.shutdown(wait=True)
+        self._config_store.shutdown()
         self._synth_pool.shutdown(wait=False, cancel_futures=True)
         for timer in self.root.tk.splitlist(self.root.tk.call("after", "info")):
             self.root.after_cancel(timer)
@@ -281,8 +286,8 @@ class App(ProductUI):
         return ("微软雅黑", max(8, round((10 + delta) * self.zoom_var.get() / 100)), "bold")
 
     def _menu_font(self):
-        """顶栏/右键菜单统一 14pt，不随缩放变化。"""
-        return ("微软雅黑", 14)
+        """顶栏/右键菜单字号与功能区标题一致，随缩放同步。"""
+        return ("微软雅黑", self._font_bold()[1])
 
     def _title_widget(self, parent, text, color=None):
         """功能区标题：主字下方1px柔和阴影；同格 grid 叠放（place 不参与请求尺寸，会塌缩成1px不可见）。"""
@@ -1123,6 +1128,27 @@ class App(ProductUI):
         self._save_cfg()
         return snap
 
+    # 配置三件套代理到 ConfigStore：测试与旧调用方读写不变，状态只存一份。
+    @property
+    def _cfg_pool(self):
+        return self._config_store.pool
+
+    @property
+    def _cfg_pending(self):
+        return self._config_store.pending
+
+    @_cfg_pending.setter
+    def _cfg_pending(self, value):
+        self._config_store.pending = value
+
+    @property
+    def _cfg_after(self):
+        return self._config_store._after
+
+    @_cfg_after.setter
+    def _cfg_after(self, value):
+        self._config_store._after = value
+
     def _save_cfg(self):
         try:
             try:
@@ -1137,7 +1163,7 @@ class App(ProductUI):
                 "key": self.key_var.get(), "region": rg, "endpoint": self.ep_var.get().strip()}
             profiles = {k: dict(v, key=v.get("key", "") if self.remember_var.get() else "")
                         for k, v in self._engine_profiles.items()}
-            self._cfg_pending = {
+            pending = {
                 "engine_profiles": profiles,
                 "engine": self.engine_var.get(), "region": rg,
                 "endpoint": self.ep_var.get().strip(), "person": self.selected,
@@ -1154,26 +1180,14 @@ class App(ProductUI):
         except (ValueError, tk.TclError):
             # 控件状态暂时不可读(如销毁中)：跳过本次暂存，不影响后续保存。
             return
-        if self._cfg_after is not None:
-            self.root.after_cancel(self._cfg_after)
-        self._cfg_after = self.root.after(350, self._flush_cfg)
+        # 到点回调走 _flush_cfg（计数+唤醒），不能直调 store.flush，否则轮询提前退出。
+        self._config_store.schedule(pending, self._flush_cfg)
 
     def _flush_cfg(self):
-        if self._cfg_after is not None:
-            self.root.after_cancel(self._cfg_after)
-            self._cfg_after = None
-        if self._cfg_pending is None:
+        if self._config_store.pending is None:
             return
-        cfg, self._cfg_pending = self._cfg_pending, None
         self._bg_n += 1
-        def write():
-            error = None
-            try:
-                engine.save_json(engine.CONFIG_FILE, cfg)
-            except Exception as e:
-                error = str(e)
-            self._bgq.put(("config_done", None, error))
-        self._cfg_pool.submit(write)
+        self._config_store.flush()
         self._bg_kick()
 
     def _dub_cfg_snapshot(self):

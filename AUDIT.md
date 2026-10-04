@@ -95,12 +95,17 @@
 
 ## ⑮ 深扫复核与底层加固（2026-10-04）
 - 方法：四路并行深扫后逐项实码核验，误报与高风险项直接排除（Edge 全局超时会误杀长文合成，沿用“未核实不动”；大文本关闭高亮与 ⑬ 既定决策冲突；组件热升级已有“使用中拒绝覆盖”闸门）。
-- 界面：主题切换先快照正文再重建（原重建 Text 用陈旧 text_content，会丢稿）；`_reflow` 宽度记栏自身（原 `_fw_<id()>` 堆积且 id 可复用）；试听清理 glob 加转义；删除恒 False 的 `_is_placeholder` 及死分支；两处右键 `grab_release` 加 TclError 保护；菜单栏字体固定 14pt，主题改为顶栏独立入口（选项/组件/主题/关于）。
+- 界面：主题切换先快照正文再重建（原重建 Text 用陈旧 text_content，会丢稿）；`_reflow` 宽度记栏自身（原 `_fw_<id()>` 堆积且 id 可复用）；试听清理 glob 加转义；删除恒 False 的 `_is_placeholder` 及死分支；两处右键 `grab_release` 加 TclError 保护；菜单栏字体恢复随缩放同步（默认 10pt），主题为顶栏独立入口（选项/组件/主题/关于）。
 - 引擎/任务：火山统一恒流式限量读取；`SegmentCache._prune` 节流加锁；`load_project` 单文件 10MB 上限；forward POST 空 voice/rate 与 GET 一致回退；对话引号正则提模块级；长文切分改游标，消除 O(n²) 复制。
 - 存储：迁移先提交新配置再清旧源（原顺序崩溃即丢 Key）；`protect_settings` 合并旧 vault（DPAPI 瞬时失败不再一次保存销毁凭据）。
 - 文档/组件：PDF/DOCX 补换行归一；SRT 只 strip 已知字幕标签；LRC 补大写/LENGTH/hh:mm:ss；DOCX 严格命名空间回退+坏包转 ValueError；导入 32MB 上限+单正则归一；OCR 失败保留已有文本页（全空才明确报错）；OCR 模型进程内单例；`prepare_playback_audio` 接 bytearray/memoryview；ffmpeg 缺失转明确报错；G2PW 安装后免重启（`_load_model` 重解析组件路径）+资产列校验；组件清单损坏转 MissingComponent；repair 残留纳入清理；prepare_models 幂等跳过+下载物校验；branding 原子写。
 - 入口/构建：CLI 模式互斥+端口校验移入 server 分支+`install-component` 异常转 SystemExit；`installation_check` 覆盖主题调色板与界面模块导入、报告写盘建目录、错误信息脱敏路径；diagnose ffmpeg 进脱敏 try；构建清 work/dist 防旧文件混入；dist 预览 exe/README 原子替换；verify 校验参数存在+卸载查 `_internal`；requirements 钉死组件原生依赖。
-- 回归：全套 149 项 OK（+14），冒烟 13 PASS； Polyphone `_b2p` None 系真实资产合法回退，严格校验误报已回退（测试套件捕获）。
+- 回归：全套 150 项 OK（+15），冒烟 13 PASS； Polyphone `_b2p` None 系真实资产合法回退，严格校验误报已回退（测试套件捕获）。
+
+## ⑯ 一期拆分：config_store.py（2026-10-04）
+- 内容：配置去抖暂存/后台落盘/单线程池从 App 搬入新模块，Tk 的 after/落盘/回报道由调用方以回调注入，零循环导入；App 只留组装（读控件拼 dict）与同名方法，`_cfg_pool/_cfg_pending/_cfg_after` 改属性代理，测试零改动。
+- 教训：首版去抖到点直调 `store.flush()`，绕过了 `_flush_cfg` 的 `_bg_n` 递增与 `_bg_kick()`，轮询提前退出致合成完成事件积压（`_active_task` 永真）；另首版回报道在工作线程调 `_bg_kick` 会卡死 `_bg_polling`（`root.after` 禁止跨线程）。两处均被测试套件捕获，现到点回调走 `App._flush_cfg`、回报道只入队，时序与旧代码一致。
+- 回归：全套 150 项 OK（含新增主线程 kick 断言），冒烟 13 PASS。
 
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。

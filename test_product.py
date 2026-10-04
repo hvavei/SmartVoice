@@ -365,14 +365,14 @@ class ProductGuiTests(unittest.TestCase):
         self.assertNotIn('重试未完成片段', entries)
         self.assertNotIn('清除试听缓存', entries)
         self.assertIn('导出设置…', entries)
-        self.assertIn('14', str(project.cget('font')))  # 菜单字号固定 14pt
+        self.assertIn(str(a._font_bold()[1]), str(project.cget('font')))  # 菜单字号=功能区标题
         comp = menubar.nametowidget(menubar.entrycget(1, 'menu'))
         self.assertEqual(comp.index('end'), 0)
         self.assertEqual(comp.type(0), 'command')
         themes = menubar.nametowidget(menubar.entrycget(2, 'menu'))
         theme_labels = [themes.entrycget(i, 'label') for i in range(themes.index('end') + 1)]
         self.assertEqual(theme_labels, ['暖白·初', '雾蓝'])
-        self.assertIn('14', str(themes.cget('font')))
+        self.assertIn(str(a._font_bold()[1]), str(themes.cget('font')))
 
     def test_output_button_points_to_synthesized_file(self):
         import os

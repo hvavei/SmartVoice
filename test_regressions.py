@@ -508,6 +508,29 @@ class GuiTests(unittest.TestCase):
         self.assertIsNotNone(a._cfg_pending)
         self.assertIn("记住Key", a.status.cget("text"))
 
+    def test_config_save_kicks_poll_only_on_main_thread(self):
+        # 工作线程调 root.after 会卡死 _bg_polling，合成完成事件永不到达。
+        import threading
+        from studio_gui import App
+        a = self.app
+        main_thread = threading.current_thread()
+        kick_threads = []
+        orig = App._bg_kick
+
+        def spy(spied_self):
+            kick_threads.append(threading.current_thread())
+            return orig(spied_self)
+
+        a.key_var.set("kick-check")
+        with patch.object(App, "_bg_kick", autospec=True, side_effect=spy):
+            a._save_cfg()
+            a._flush_cfg()
+            fut = a._cfg_pool.submit(lambda: None)
+            fut.result(timeout=30)
+            self.root.update()
+        self.assertTrue(kick_threads)
+        self.assertTrue(all(t is main_thread for t in kick_threads))
+
     def test_remembered_key_reaches_persist_payload(self):
         a = self.app
         a.remember_var.set(True)
