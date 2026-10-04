@@ -1679,78 +1679,19 @@ class App(ProductUI):
         """Azure 最多两路在途请求；输出按原文排序，回调按段编号聚合。
 
         点停止（取消）后不再提交新段，未完成段返回 None，已完成段照常拼接输出。
+        实现见 synth_jobs.run_jobs，本方法只组装无 Tk 的调用上下文。
         """
-        halted = threading.Event()
-        results = [None] * len(jobs)
-        def run(index):
-            if seq != self._seq or halted.is_set():
-                raise engine.SynthesisCancelled("合成已取消")
-            voice, _, text = jobs[index]
-            token = snap.get('_cancel', self._task_token)
-            token.check()
-            key = workflow.fingerprint(text, voice, snap)
-            cached = self._segment_cache.load(key)
-            if cached is not None:
-                if snap.get('_diag'):
-                    snap['_diag'].event('segment_cache', index + 1, cached=True)
-                self._bgq.put(('cache_segment', seq, key))
-                self._bgq.put(('segment', seq, index + 1))
-                return cached
-            progress, stage = self._progress_callbacks(seq, index + 1, token)
-            def checked(callback):
-                def call(*args):
-                    if halted.is_set():
-                        raise engine.SynthesisCancelled("合成已取消")
-                    return callback(*args)
-                return call
-            per_segment = dict(snap, _index=index + 1)
-            data = self.synth_net(text, per_segment, voice, on_progress=checked(progress), on_stage=checked(stage))
-            try:
-                self._segment_cache.save(key, data)
-            except OSError:
-                # 缓存是优化项: 磁盘满/权限不足只丢缓存, 不判死已合成的段
-                if snap.get('_diag'):
-                    snap['_diag'].event('cache_write_failed', error_type='OSError')
-            self._bgq.put(('cache_segment', seq, key))
-            if seq != self._seq:
-                raise engine.SynthesisCancelled("合成已取消")
-            self._bgq.put(("segment", seq, index + 1))
-            return data
-
-        if len(jobs) < 2 or engine.kind_of(snap["engine"]) != "azure":
-            for i in range(len(jobs)):
-                try:
-                    results[i] = run(i)
-                except (workflow.Cancelled, engine.SynthesisCancelled):
-                    break  # 取消：已合成的段保留，未完成段留空
-            return results
-        pending, next_index = {}, 0
-        try:
-            while pending or next_index < len(jobs):
-                if seq != self._seq:
-                    raise engine.SynthesisCancelled("合成已取消")
-                while len(pending) < 2 and next_index < len(jobs):
-                    pending[self._synth_pool.submit(run, next_index)] = next_index
-                    next_index += 1
-                finished, _ = wait(pending, timeout=.05, return_when=FIRST_COMPLETED)
-                for future in finished:
-                    index = pending.pop(future)
-                    results[index] = future.result()
-        except (workflow.Cancelled, engine.SynthesisCancelled):
-            # 取消：短暂收割在途段，刚好完成的照常输出，其余留空
-            if pending:
-                done_now, _ = wait(pending, timeout=.05)
-                for future in done_now:
-                    index = pending.pop(future)
-                    try:
-                        results[index] = future.result()
-                    except Exception:
-                        pass
-        finally:
-            halted.set()
-            for future in pending:
-                future.cancel()
-        return results
+        from synth_jobs import JobContext, run_jobs
+        ctx = JobContext(
+            is_current=lambda s: s == self._seq,
+            emit=lambda kind, s, payload: self._bgq.put((kind, s, payload)),
+            cache=self._segment_cache,
+            callbacks=lambda s, i, t: self._progress_callbacks(s, i, t),
+            synth=lambda text, seg, voice, **kw: self.synth_net(text, seg, voice, **kw),
+            pool=self._synth_pool,
+            token=lambda: self._task_token,
+        )
+        return run_jobs(ctx, seq, jobs, snap)
 
     def _audition_voice(self, display, voice_id):
         if self._active_task:

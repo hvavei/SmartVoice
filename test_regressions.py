@@ -1564,5 +1564,116 @@ class TaskManagerTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class SynthJobsTests(unittest.TestCase):
+    def _ctx(self, synth, pool=None, current=True, cache=None):
+        import voice_tasks as workflow
+        from synth_jobs import JobContext
+        from concurrent.futures import ThreadPoolExecutor
+        store = {}
+        fake_cache = cache or type("C", (), {
+            "load": lambda self, k: store.get(k),
+            "save": lambda self, k, v: store.__setitem__(k, v),
+        })()
+        events = []
+        return JobContext(
+            is_current=lambda s: current if isinstance(current, bool) else current(),
+            emit=lambda k, s, p: events.append((k, s, p)),
+            cache=fake_cache,
+            callbacks=lambda s, i, t: (lambda *a: None, lambda *a: None),
+            synth=synth,
+            pool=pool or ThreadPoolExecutor(max_workers=2),
+            token=lambda: workflow.Cancellation(),
+        ), events, store
+
+    def test_serial_order_and_cache_reuse_without_tk(self):
+        import engine
+        from synth_jobs import run_jobs
+        calls = []
+        ctx, events, store = self._ctx(lambda text, seg, voice, **kw: calls.append(text) or text.encode())
+        snap = {"engine": "Edge免费(免Key)"}
+        jobs = [("v", "r", c) for c in "abc"]
+        self.assertEqual(run_jobs(ctx, 7, jobs, snap), [b"a", b"b", b"c"])
+        self.assertEqual(calls, ["a", "b", "c"])
+        calls.clear()
+        self.assertEqual(run_jobs(ctx, 7, jobs, snap), [b"a", b"b", b"c"])
+        self.assertEqual(calls, [])  # 第二遍全命中缓存，不再合成
+        kinds = [k for k, s, p in events]
+        self.assertIn("cache_segment", kinds)
+        self.assertIn("segment", kinds)
+
+    def test_parallel_bounded_and_ordered(self):
+        import threading
+        import time
+        import engine
+        from synth_jobs import run_jobs
+        from concurrent.futures import ThreadPoolExecutor
+        barrier = threading.Barrier(2)
+        lock = threading.Lock()
+        active, peak = [0], [0]
+
+        def synth(text, seg, voice, **kw):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            try:
+                if text in ("0", "1"):
+                    barrier.wait(timeout=5)
+                if text == "0":
+                    time.sleep(.06)
+                return text.encode()
+            finally:
+                with lock:
+                    active[0] -= 1
+
+        pool = ThreadPoolExecutor(max_workers=2)
+        try:
+            ctx, events, store = self._ctx(synth, pool=pool)
+            snap = {"engine": engine.ENGINE_CHOICES[0]}
+            jobs = [("v", "r", str(i)) for i in range(4)]
+            self.assertEqual(run_jobs(ctx, 3, jobs, snap), [b"0", b"1", b"2", b"3"])
+            self.assertLessEqual(peak[0], 2)
+        finally:
+            pool.shutdown(wait=True)
+
+    def test_cancel_keeps_finished_parts(self):
+        import voice_tasks as workflow
+        from synth_jobs import run_jobs
+
+        def synth(text, seg, voice, **kw):
+            if text == "bad":
+                raise workflow.Cancelled("停")
+            return text.encode()
+
+        ctx, events, store = self._ctx(synth)
+        snap = {"engine": "Edge免费(免Key)"}
+        self.assertEqual(run_jobs(ctx, 1, [("v", "r", "ok"), ("v", "r", "bad"), ("v", "r", "later")],
+                                    snap), [b"ok", None, None])
+
+    def test_stale_seq_aborts_immediately(self):
+        from synth_jobs import run_jobs
+        calls = []
+        ctx, events, store = self._ctx(lambda text, seg, voice, **kw: calls.append(text) or b"x",
+                                       current=False)
+        snap = {"engine": "Edge免费(免Key)"}
+        self.assertEqual(run_jobs(ctx, 9, [("v", "r", "a"), ("v", "r", "b")], snap), [None, None])
+        self.assertEqual(calls, [])
+
+    def test_cache_write_failure_keeps_audio(self):
+        from synth_jobs import run_jobs
+        diag = Mock()
+
+        class BadCache:
+            def load(self, key):
+                return None
+
+            def save(self, key, data):
+                raise OSError("磁盘满")
+
+        ctx, events, store = self._ctx(lambda text, seg, voice, **kw: b"data", cache=BadCache())
+        snap = {"engine": "Edge免费(免Key)", "_diag": diag}
+        self.assertEqual(run_jobs(ctx, 5, [("v", "r", "x")], snap), [b"data"])
+        diag.event.assert_called_with("cache_write_failed", error_type="OSError")
+
+
 if __name__ == '__main__':
     unittest.main()
