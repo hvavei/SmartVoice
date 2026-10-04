@@ -107,6 +107,10 @@
 - 教训：首版去抖到点直调 `store.flush()`，绕过了 `_flush_cfg` 的 `_bg_n` 递增与 `_bg_kick()`，轮询提前退出致合成完成事件积压（`_active_task` 永真）；另首版回报道在工作线程调 `_bg_kick` 会卡死 `_bg_polling`（`root.after` 禁止跨线程）。两处均被测试套件捕获，现到点回调走 `App._flush_cfg`、回报道只入队，时序与旧代码一致。
 - 回归：全套 150 项 OK（含新增主线程 kick 断言），冒烟 13 PASS。
 
+## ⑰ 三期拆分：task_manager.py（2026-10-04）
+- 内容：后台泵 mechanics（队列/在途计数/轮询定时/序号/提交/取消）从 App 搬入新模块，路由 handler 与渲染回调由 App 注入；`_bg/_bg_run/_bg_poll/_bg_kick/_preempt` 改薄委托，`_bgq/_bg_n/_bg_polling/_seq` 改属性代理，测试零改动；顺手删 studio_gui 闲置的 `import queue`。
+- 回归：全套 152 项 OK（含 TaskManager 提交/取消/路由/续跑单测），冒烟 13 PASS。
+
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。
 - 独立音色能力策略：VoiceType 只展示类别，StyleList/RolePlayList 控制可选值，SSML prosody/phoneme 按模型族策略判断。未知能力保守禁用非默认参数；多人任务逐音色校验，错误包含角色名，不静默降级/换声。

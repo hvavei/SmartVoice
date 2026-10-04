@@ -1527,5 +1527,42 @@ class DeepRegressionTests(unittest.TestCase):
             self.assertIn('theme-and-menu-present', data['checks'])
 
 
+class TaskManagerTests(unittest.TestCase):
+    def _manager(self, calls):
+        from task_manager import TaskManager
+        return TaskManager(schedule_fn=lambda ms, cb: calls.append((ms, cb)) or "h",
+                           cancel_fn=lambda h: calls.append(("cancel", h)))
+
+    def test_submit_preempt_and_poll_routing(self):
+        calls = []
+        mgr = self._manager(calls)
+        self.assertEqual(mgr.submit(lambda: None), 0)
+        self.assertEqual(mgr.inflight, 1)
+        self.assertEqual(len(calls), 1)  # 提交即唤醒一次
+        self.assertEqual(mgr.preempt(), 1)
+        seen, rendered = [], []
+        mgr.handle = lambda k, s, p: seen.append((k, s, p)) or True
+        mgr.render = lambda: rendered.append(1)
+        mgr.is_active = lambda: True
+        mgr.put("progress", 1, (50, 100))
+        mgr.poll()
+        self.assertEqual(seen, [("progress", 1, (50, 100))])
+        self.assertEqual(rendered, [1])
+        self.assertTrue(mgr._polling)  # 有在途，已续跑
+        mgr.inflight = 0
+        mgr.poll()
+        self.assertFalse(mgr._polling)  # 空队列、无在途，停跑
+
+    def test_poll_reschedules_while_inflight(self):
+        calls = []
+        mgr = self._manager(calls)
+        mgr.handle = lambda k, s, p: False
+        mgr.poll()  # 空队列、无在途：不再唤醒
+        self.assertEqual(calls, [])
+        mgr.inflight = 1
+        mgr.poll()  # 有在途：续跑一次
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

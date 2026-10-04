@@ -3,7 +3,6 @@
 BTN_W = 16  # 标准功能按钮宽度(字符数)
 # SLOT_AUD_W/MAX_DUB/FILTERS/gender_of 随面板搬入 ui 包，此处经由 import 重导出以兼容旧引用。
 import os
-import queue
 import re
 import subprocess
 import sys
@@ -21,6 +20,7 @@ import appmeta
 import storage
 import theme
 from config_store import ConfigStore
+from task_manager import TaskManager
 from ui.serverbar import build_serverbar
 from ui.toolbar import build_toolbar
 from ui.configbar import build_configbar, ZOOMS
@@ -176,7 +176,6 @@ class App(ProductUI):
         )
         self.server = None
         self.busy = False
-        self._seq = 0
         self._last_w = 0
         cfg = engine.load_json(engine.CONFIG_FILE, {})
         self._init_product(cfg)
@@ -215,9 +214,13 @@ class App(ProductUI):
         self.dub_cfg = self._valid_dub_cfg(cfg.get("multidub"))
         self._prog = {"active": False, "mode": None, "total": 0,
                       "done": 0, "seq": 0, "after": None}
-        self._bgq = queue.Queue()
-        self._bg_n = 0
-        self._bg_polling = False
+        self._tasks = TaskManager(
+            schedule_fn=lambda ms, cb: self.root.after(ms, cb),
+            cancel_fn=self.root.after_cancel,
+        )
+        self._tasks.handle = self._handle_bg_event
+        self._tasks.render = self._prog_render
+        self._tasks.is_active = lambda: self._prog.get("active")
         self._dub = {}  # 重建时重填的配音控件引用
         self._load_engine_voices()
         self._theme_name = theme.apply(cfg.get("theme", theme.DEFAULT_THEME),
@@ -1399,97 +1402,100 @@ class App(ProductUI):
         except tk.TclError:
             pass
 
+    # 后台泵四件套代理到 TaskManager：测试与旧调用方读写不变，状态只存一份。
+    @property
+    def _bgq(self):
+        return self._tasks.queue
+
+    @property
+    def _bg_n(self):
+        return self._tasks.inflight
+
+    @_bg_n.setter
+    def _bg_n(self, value):
+        self._tasks.inflight = value
+
+    @property
+    def _bg_polling(self):
+        return self._tasks._polling
+
+    @_bg_polling.setter
+    def _bg_polling(self, value):
+        self._tasks._polling = value
+
+    @property
+    def _seq(self):
+        return self._tasks.seq
+
+    @_seq.setter
+    def _seq(self, value):
+        self._tasks.seq = value
+
     def _bg(self, work):
         # v2.0线程安全: 工作线程只往队列放结果, 主线程轮询回放, 永不跨线程碰Tk
         # (旧版root.after跨线程在任务瞬间完成时会"main thread is not in main loop"崩溃)
         self.busy = True
-        self._bg_n += 1
-        threading.Thread(target=self._bg_run, args=(work, self._seq), daemon=True).start()
-        self._bg_kick()
+        seq = self._tasks.seq
+        self._tasks.submit(lambda: self._bg_run(work, seq))
 
     def _bg_kick(self):
-        if self._bg_polling:
-            return
-        self._bg_polling = True
-        try:
-            self.root.after(50, self._bg_poll)
-        except tk.TclError:
-            self._bg_polling = False
+        self._tasks.kick()
 
     def _bg_poll(self):
-        self._bg_polling = False
-        dirty = False
-        started = time.monotonic()
-        try:
-            try:
-                # 避免高频网络回调长期占住 Tk 主线程。
-                for _ in range(100):
-                    if time.monotonic() - started > 0.008:
-                        break
-                    kind, seq, payload = self._bgq.get_nowait()
-                    if kind == 'cache_segment':
-                        # 局部试听/预览的段不进项目缓存清单, 否则污染项目保存
-                        if (seq == self._seq and not getattr(self, '_task_preview', False)
-                                and payload not in self._segment_keys):
-                            self._segment_keys.append(payload)
-                        continue
-                    if kind == "config_done":
-                        self._bg_n = max(0, self._bg_n - 1)
-                        if payload:
-                            msg = f"配置保存失败: {payload}"
-                            if self._active_task:
-                                # 任务运行中不覆盖任务状态, 追加提示
-                                msg = f"{self.status.cget('text')} · {msg}"
-                            self.status.config(text=msg)
-                        continue
-                    if kind in ("segment", "progress", "phase", "synth_complete", "post_complete"):
-                        if seq == self._seq and self._prog.get("active") and seq == self._prog["seq"]:
-                            if kind == "segment":
-                                self._prog["completed"].add(payload)
-                                self._prog["done"] = len(self._prog["completed"])
-                            elif kind == "synth_complete":
-                                self._prog["completed"] = set(range(1, self._prog["total"] + 1))
-                                self._prog["done"] = self._prog["total"]
-                            elif kind == "post_complete":
-                                self._prog["post_done"] = payload
-                            elif kind == "phase":
-                                label, index = payload
-                                self._prog.update(stage=label, index=index, received=0, bytes_total=0)
-                            else:
-                                cur, total = payload[:2]
-                                index = payload[2] if len(payload) > 2 else self._prog["index"]
-                                segment = self._prog["segments"].setdefault(index, {})
-                                if total > 0:
-                                    segment["fraction"] = max(segment.get("fraction", 0), min(.99, cur / total))
-                                self._prog.update(received=cur, bytes_total=total, index=index)
-                                self._prog["stage"] = f"接收第{index}段" if self._prog["mode"] == "multi" else "接收音频"
-                            dirty = True
-                        continue
-                    self._bg_n = max(0, self._bg_n - 1)
-                    if seq != self._seq:
-                        if kind == "done":
-                            if hasattr(payload, "discard"):
-                                payload.discard()
-                            if not self._active_task:
-                                self.status.config(text="旧任务结果已因新操作丢弃")
-                        continue
-                    if kind == "done":
-                        self._finish_done(payload)
-                    else:
-                        self._finish_fail(payload)
-            except queue.Empty:
-                pass
-            if dirty and self._prog.get("active"):
-                self._prog_render()
-        except Exception:
-            # 单条事件处理异常不许打断轮询链，否则事件永久滞留、进度冻结。
-            pass
-        finally:
-            try:
-                if self._bg_n > 0 or not self._bgq.empty():
-                    self._bg_kick()
-            except tk.TclError:
-                pass
+        self._tasks.poll()
+
+    def _handle_bg_event(self, kind, seq, payload):
+        if kind == 'cache_segment':
+            # 局部试听/预览的段不进项目缓存清单, 否则污染项目保存
+            if (seq == self._seq and not getattr(self, '_task_preview', False)
+                    and payload not in self._segment_keys):
+                self._segment_keys.append(payload)
+            return False
+        if kind == "config_done":
+            self._bg_n = max(0, self._bg_n - 1)
+            if payload:
+                msg = f"配置保存失败: {payload}"
+                if self._active_task:
+                    # 任务运行中不覆盖任务状态, 追加提示
+                    msg = f"{self.status.cget('text')} · {msg}"
+                self.status.config(text=msg)
+            return False
+        if kind in ("segment", "progress", "phase", "synth_complete", "post_complete"):
+            if seq == self._seq and self._prog.get("active") and seq == self._prog["seq"]:
+                if kind == "segment":
+                    self._prog["completed"].add(payload)
+                    self._prog["done"] = len(self._prog["completed"])
+                elif kind == "synth_complete":
+                    self._prog["completed"] = set(range(1, self._prog["total"] + 1))
+                    self._prog["done"] = self._prog["total"]
+                elif kind == "post_complete":
+                    self._prog["post_done"] = payload
+                elif kind == "phase":
+                    label, index = payload
+                    self._prog.update(stage=label, index=index, received=0, bytes_total=0)
+                else:
+                    cur, total = payload[:2]
+                    index = payload[2] if len(payload) > 2 else self._prog["index"]
+                    segment = self._prog["segments"].setdefault(index, {})
+                    if total > 0:
+                        segment["fraction"] = max(segment.get("fraction", 0), min(.99, cur / total))
+                    self._prog.update(received=cur, bytes_total=total, index=index)
+                    self._prog["stage"] = f"接收第{index}段" if self._prog["mode"] == "multi" else "接收音频"
+                return True
+            return False
+        self._bg_n = max(0, self._bg_n - 1)
+        if seq != self._seq:
+            if kind == "done":
+                if hasattr(payload, "discard"):
+                    payload.discard()
+                if not self._active_task:
+                    self.status.config(text="旧任务结果已因新操作丢弃")
+            return False
+        if kind == "done":
+            self._finish_done(payload)
+        else:
+            self._finish_fail(payload)
+        return False
 
     def _bg_run(self, work, seq):
         try:
@@ -1544,7 +1550,7 @@ class App(ProductUI):
         self._task_token.cancel()
         self._task_token = workflow.Cancellation()
         self._audition_pending_key = None
-        self._seq += 1
+        self._tasks.preempt()
         self.busy = False
         return self._seq
 
