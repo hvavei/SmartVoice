@@ -1,12 +1,16 @@
 """转发服务(MultiTTS式): GET /voices 查人声, GET/POST /forward 合成语音."""
 import json
+import threading
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import appmeta
 
 MAX_BODY = 1 << 20   # POST 请求体上限 1MB，防无上限读内存
 MAX_TEXT = 100_000   # 单次合成文本上限
+MAX_WORKERS = 8      # 并发合成上限，超出排队
+MAX_QUEUED = 16      # 排队上限，再多直接 503（防 Slowloris 耗尽线程）
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -93,11 +97,91 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def run_server(port, synth_fn, voices_fn):
+def run_server(port, synth_fn, voices_fn, max_workers=MAX_WORKERS, queue_size=MAX_QUEUED):
     _Handler.synth_fn = staticmethod(synth_fn)
     _Handler.voices_fn = staticmethod(voices_fn)
-    srv = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    srv = BoundedThreadingHTTPServer(("127.0.0.1", port), _Handler,
+                                     max_workers=max_workers, queue_size=queue_size)
     try:
         srv.serve_forever()
     finally:
         srv.server_close()
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """有界线程池替代每连接一线程：占满后直接 503 + 关连接，不再无上限建线程。"""
+    daemon_threads = True
+
+    def __init__(self, *args, max_workers=MAX_WORKERS, queue_size=MAX_QUEUED, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pool = ThreadPoolExecutor(max_workers=max_workers,
+                                        thread_name_prefix="forward")
+        self._slots = threading.Semaphore(max_workers + queue_size)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            _reject_overloaded(request)
+            return
+        try:
+            self._pool.submit(self._process_one, request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def _process_one(self, request, client_address):
+        try:
+            self.finish_request(request, client_address)
+        except Exception:
+            self.handle_error(request, client_address)
+        finally:
+            try:
+                self.shutdown_request(request)
+            finally:
+                self._slots.release()
+
+    def server_close(self):
+        super().server_close()
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _reject_overloaded(request):
+    """排空请求头(+已声明 body)再回 503：残留未读数据会让 Windows 发 RST 吞掉状态码。"""
+    try:
+        request.settimeout(2)
+        data = b""
+        while b"\r\n\r\n" not in data and len(data) < 65536:
+            chunk = request.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        head, _, rest = data.partition(b"\r\n\r\n")
+        length = 0
+        for line in head.split(b"\r\n")[1:]:
+            if line.lower().startswith(b"content-length:"):
+                try:
+                    length = max(0, int(line.split(b":", 1)[1].strip()))
+                except ValueError:
+                    length = 0
+                break
+        length = min(length, MAX_BODY)
+        while len(rest) < length:
+            chunk = request.recv(min(65536, length - len(rest)))
+            if not chunk:
+                break
+            rest += chunk
+    except OSError:
+        pass
+    finally:
+        try:
+            request.settimeout(None)
+        except OSError:
+            pass
+    try:
+        request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
+                        b"Connection: close\r\nContent-Length: 0\r\n\r\n")
+    except OSError:
+        pass
+    try:
+        request.close()
+    except OSError:
+        pass

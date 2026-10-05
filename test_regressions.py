@@ -293,6 +293,39 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(out, b'ID3v')
         self.assertTrue(session.post.call_args.kwargs['stream'])
 
+    def test_edge_stream_concatenates_audio_chunks(self):
+        import edge_tts
+
+        class GoodComm:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def stream(self):
+                yield {"type": "WordsBoundary", "data": {}}
+                yield {"type": "audio", "data": b"ID3"}
+                yield {"type": "audio", "data": b"xx"}
+
+        with patch("edge_tts.Communicate", GoodComm):
+            out = engine.synth_edge("hi", "zh-CN-YunxiNeural", attempts=1)
+        self.assertEqual(out, b"ID3xx")
+
+    def test_edge_stalled_stream_times_out_per_chunk(self):
+        import asyncio
+        import edge_tts
+
+        class StalledComm:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def stream(self):
+                yield {"type": "audio", "data": b"ID3"}
+                await asyncio.sleep(3600)
+
+        with patch("edge_tts.Communicate", StalledComm), \
+                patch.object(engine, "EDGE_CHUNK_TIMEOUT", 0.05):
+            with self.assertRaisesRegex(RuntimeError, "TimeoutError"):
+                engine.synth_edge("你好", "zh-CN-YunxiNeural", attempts=1)
+
 
 class DocumentReflowTests(unittest.TestCase):
     def test_soft_wrapped_lines_merge_into_paragraphs(self):
@@ -1370,6 +1403,57 @@ class DeepRegressionTests(unittest.TestCase):
             self.assertEqual(seen['rate'], '+0%')
             conn.close()
         finally:
+            srv.shutdown()
+            srv.server_close()
+            forward_server._Handler.synth_fn = prev
+
+    def test_saturated_forward_server_rejects_with_503(self):
+        import socket
+        import threading
+        import time
+        import forward_server
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_synth(text, voice, rate):
+            entered.set()
+            release.wait(timeout=10)
+            return b"ID3slow"
+
+        prev = forward_server._Handler.synth_fn
+        forward_server._Handler.synth_fn = staticmethod(slow_synth)
+        srv = forward_server.BoundedThreadingHTTPServer(
+            ('127.0.0.1', 0), forward_server._Handler, max_workers=1, queue_size=0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            holder = socket.create_connection(('127.0.0.1', srv.server_address[1]), timeout=5)
+            holder.sendall(b"POST /forward HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                            b"Content-Length: 14\r\n\r\n{\"text\": \"hi\"}")
+            self.assertTrue(entered.wait(timeout=5))
+            probe = socket.create_connection(('127.0.0.1', srv.server_address[1]), timeout=5)
+            try:
+                probe.sendall(b"GET /forward?text=hi HTTP/1.1\r\nHost: x\r\n\r\n")
+                resp = probe.makefile('rb').readline().decode('latin-1')
+                self.assertIn('503', resp)
+            finally:
+                probe.close()
+            release.set()
+            deadline = time.monotonic() + 5
+            while True:
+                check = socket.create_connection(('127.0.0.1', srv.server_address[1]), timeout=5)
+                try:
+                    check.sendall(b"GET /forward?text=hi HTTP/1.1\r\nHost: x\r\n\r\n")
+                    line = check.makefile('rb').readline().decode('latin-1')
+                    if '200' in line:
+                        break
+                finally:
+                    check.close()
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.05)
+            holder.close()
+        finally:
+            release.set()
             srv.shutdown()
             srv.server_close()
             forward_server._Handler.synth_fn = prev
