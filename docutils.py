@@ -13,6 +13,8 @@ _OCR_LOCK = threading.Lock()
 
 def extract_pdf_text(path, ocr=False):
     import pypdf
+    import storage
+    path = storage.long_path(path)
     reader = pypdf.PdfReader(path)
     try:
         pages = list(reader.pages)
@@ -51,6 +53,8 @@ def _ocr_pages(path, page_indices):
     ocr = create_ocr()          # 必须先激活OCR组件：标准版的 numpy 随组件分发，晚于导入会 ModuleNotFoundError
     import numpy as np
     import pypdfium2 as pdfium
+    import storage
+    path = storage.long_path(path)
     result = {}
     with pdfium.PdfDocument(path) as pdf:
         for idx in page_indices:

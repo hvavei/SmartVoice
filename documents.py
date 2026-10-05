@@ -28,7 +28,8 @@ def _utf16_no_bom_endian(sample):
 
 
 def read_text(path):
-    data = Path(path).read_bytes()
+    import storage
+    data = Path(storage.long_path(path)).read_bytes()
     if len(data) > MAX_TEXT_BYTES:
         raise ValueError('文件过大（超过32MB），请拆分后导入')
     if data.startswith((b'\xff\xfe', b'\xfe\xff')):

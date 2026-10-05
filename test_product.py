@@ -44,6 +44,38 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(Path(path).read_bytes(), b'one')
             self.assertEqual(Path(path2).read_bytes(), b'two')
 
+    def test_long_path_helper(self):
+        import os
+        if os.name != 'nt':
+            self.skipTest('Windows long paths')
+        short = r'C:\SmartVoice\out.mp3'
+        self.assertEqual(storage.long_path(short), short)  # 未超限原样返回
+        self.assertEqual(storage.long_path('relative\\out.mp3'), 'relative\\out.mp3')
+        long_abs = 'C:\\' + '深目录\\' * 80 + 'out.mp3'
+        converted = storage.long_path(long_abs)
+        self.assertTrue(converted.startswith('\\\\?\\'))
+        self.assertNotIn('/', converted)
+        already = '\\\\?\\C:\\x.mp3'
+        self.assertEqual(storage.long_path(already), already)
+        unc = '\\\\srv\\share\\' + 'd' * 240 + '.mp3'
+        self.assertTrue(storage.long_path(unc).startswith('\\\\?\\UNC\\'))
+
+    def test_long_path_roundtrip(self):
+        import os
+        if os.name != 'nt':
+            self.skipTest('Windows long paths')
+        with tempfile.TemporaryDirectory() as tmp:
+            deep = Path(tmp)
+            while len(str(deep)) < 280:
+                deep = deep / 'subdir-deep-name'
+            Path(storage.long_path(deep)).mkdir(parents=True, exist_ok=True)
+            cfg_path = deep / 'settings.json'
+            storage.atomic_json(cfg_path, {'v': 1})
+            self.assertEqual(storage.read_json(cfg_path), {'v': 1})
+            out = storage.unique_export(deep, '成品', 'wav', b'data')
+            self.assertFalse(out.startswith('\\\\?\\'))  # 返回短形态：explorer 可用
+            self.assertEqual(Path(out).read_bytes(), b'data')
+
     def test_fingerprint_reuse_and_parameter_invalidation(self):
         snap = {'engine': 'Azure(填Key)', 'key': 'secret', 'rate': '100%'}
         key = workflow.fingerprint('原文', 'voice', snap)

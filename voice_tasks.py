@@ -299,7 +299,7 @@ def save_project(path, project, cache):
     manifest['engine_settings'] = {'region': service.get('region', ''), 'endpoint': safe_url(service.get('endpoint', ''))}
     manifest.update(format='SmartVoiceProject', schema=1)
     # 直接写临时文件（流式），避免 BytesIO 全内存双份拷贝；与 load_project 的1GB上限对齐。
-    tmp = Path(str(path) + '.tmp')
+    tmp = Path(storage.long_path(str(path)) + '.tmp')
     missing = 0
     written = 0
     try:
@@ -314,7 +314,7 @@ def save_project(path, project, cache):
                 if written > 1024**3:
                     raise ValueError('项目音频超过1GB，无法保存；请清理片段缓存或拆分项目')
                 z.writestr(f'segments/{key}.audio', audio)
-        tmp.replace(path)
+        tmp.replace(storage.long_path(path))
     finally:
         try:
             tmp.unlink(missing_ok=True)
@@ -325,7 +325,7 @@ def save_project(path, project, cache):
 
 def load_project(path, cache):
     import zipfile
-    with zipfile.ZipFile(path) as z:
+    with zipfile.ZipFile(storage.long_path(path)) as z:
         names = set(z.namelist())
         if 'project.json' not in names:
             raise ValueError('不是 SmartVoice 项目文件（缺少 project.json）')

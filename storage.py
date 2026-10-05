@@ -18,8 +18,28 @@ LOG_DIR = DATA_DIR / 'logs'
 _vault_lock = threading.Lock()
 
 
+def long_path(path):
+    """超长路径直通：绝对路径按需加 \\\\?\\ 前缀绕过 260 限制。
+
+    只在长度逼近上限时转换，普通路径保持原样；已加前缀/非 Windows 原样返回。
+    返回值仅供 Python 侧 IO 使用，不要传给 explorer/外部程序（它们不认前缀）。
+    """
+    if os.name != 'nt':
+        return path
+    text = str(path)
+    if text.startswith('\\\\?\\'):
+        return path
+    if text.startswith('\\\\'):
+        converted = '\\\\?\\UNC\\' + text[2:].replace('/', '\\')
+    elif len(text) >= 240 and os.path.isabs(text):
+        converted = '\\\\?\\' + text.replace('/', '\\')
+    else:
+        return path
+    return converted
+
+
 def atomic_bytes(path, data):
-    path = Path(path)
+    path = Path(long_path(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = None
     try:
@@ -41,7 +61,7 @@ def atomic_bytes(path, data):
 def read_json(path, default=None):
     try:
         # utf-8-sig：外部工具（记事本/VS Code）另存为带 BOM 的 UTF-8 也能读，无 BOM 时行为不变。
-        return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+        return json.loads(Path(long_path(path)).read_text(encoding='utf-8-sig'))
     except (OSError, ValueError):
         return {} if default is None else default
 
@@ -176,7 +196,8 @@ def unique_export(directory, name, extension, data):
     """同目录完整写入后以硬链接原子发布，存在同名文件时不覆盖。"""
     import re
     directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
+    workdir = Path(long_path(directory))
+    workdir.mkdir(parents=True, exist_ok=True)
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip(' .')[:100] or '配音'
     base = name.split('.')[0]
     if base.upper() in {'CON', 'PRN', 'AUX', 'NUL'} or re.fullmatch(r'(COM|LPT)[1-9]', base, re.I):
@@ -186,16 +207,16 @@ def unique_export(directory, name, extension, data):
         raise ValueError('仅支持 MP3/WAV')
     tmp = None
     try:
-        with tempfile.NamedTemporaryFile(dir=directory, delete=False) as f:
+        with tempfile.NamedTemporaryFile(dir=workdir, delete=False) as f:
             tmp = Path(f.name)
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
         for number in range(10000):
-            target = directory / f'{name}{"-" + str(number) if number else ""}.{extension}'
+            target = workdir / f'{name}{"-" + str(number) if number else ""}.{extension}'
             try:
                 os.link(tmp, target)
-                return str(target)
+                return str(directory / target.name)
             except FileExistsError:
                 continue
             except OSError:
@@ -204,7 +225,7 @@ def unique_export(directory, name, extension, data):
                     raise
                 try:
                     os.rename(tmp, target)
-                    return str(target)
+                    return str(directory / target.name)
                 except FileExistsError:
                     continue
                 except PermissionError:
