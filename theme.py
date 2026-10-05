@@ -59,11 +59,6 @@ DEFAULT_THEME = "warm"
 ACTIVE = DEFAULT_THEME
 
 
-def palette(name=None):
-    """返回指定主题的调色板字典；缺省为当前生效主题。"""
-    return THEMES.get(name or ACTIVE, THEMES[DEFAULT_THEME])
-
-
 def apply(name, *namespaces):
     """切换当前主题并刷新 theme 模块属性；附带同步已 from-import 调色板的业务命名空间。"""
     key = name if name in THEMES else DEFAULT_THEME

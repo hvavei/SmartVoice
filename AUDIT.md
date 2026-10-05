@@ -124,6 +124,14 @@
 - 退出防卡死：`DaemonPool`（工作线程 daemon，退出不钉解释器）+ 关闭落盘最多等 10 秒 + `on_close` 可重入；GUI 转发改有界服务；阻塞任务下关闭秒回有单测为证。
 - 回归：全套 174 项 OK（+8），冒烟 13 PASS。
 
+## ⑳ 通筛复核与直接修复（2026-10-05）
+- 方法：四路并行深扫后逐项实码核验，纠正误报 5 处：ConfigStore after_cancel 守卫（实测已触发 id 不抛）、`_b2p` 已在 ⑮ 处理、`_dub_all`/kind 双名垫片系有意兼容、`engine:321` 改写保护是 2 行安全网、requirements 早已钉死。
+- 界面：trace 重建叠加加一次性守卫（切 3 次主题击键触发 4 次保存）；on_close/播放/编辑三处 after_cancel 加守卫；转发端口范围闸与 CLI 对齐；空筛选回空列表 + “无匹配人声”提示；menus 改动态取色（主题切换旧菜单颜色残留）；缩放同步进度条与文本内边距；删 `palette()`、`accent` 参数与 Accent 样式；菜单栏 14pt 按指令改回 10pt 随缩放。
+- 引擎/存储：任务级注音指纹（仅 G2PW 可用时加键，无组件用户缓存不受影响）；取消记住清空凭据库（与瞬时失败保留区分）；Edge 流双层 aclose 防 fd 泄漏；孤儿 audio 镜像回收；None 令牌回退；导出非法值统一中文文案。
+- 文档/组件：reflow 改 join 消 O(n²)；DOCX 截断 XML/长路径/32MB 上限；SRT 白名单标签；LRC 大写/LENGTH/hh:mm:ss；组件指针非 dict/缺 component.json 转友好异常；OCR 异常面放宽到 ImportError/OSError；imageio 缺包装；prepare 自愈（坏文件先删后下，manifest 源保留）。
+- 入口/构建：CLI 端口读已保存配置；签名状态双版累积；verify 递归查缓存/URL 语义取包名；diagnose 无 Key 速败；diagnose_azure 拆出 main() 可测；ffmpeg 报错脱敏路径；魔法数命名；试听缓存键哈希 Key/端点。
+- 回归：全套 194 项 OK（+20），冒烟 13 PASS；新增测试自身 3 处笔误（换行吞并、textindex 比较、asyncgen 状态字符串）均当场修正。
+
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。
 - 独立音色能力策略：VoiceType 只展示类别，StyleList/RolePlayList 控制可选值，SSML prosody/phoneme 按模型族策略判断。未知能力保守禁用非默认参数；多人任务逐音色校验，错误包含角色名，不静默降级/换声。

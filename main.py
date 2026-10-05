@@ -14,6 +14,8 @@ def installation_check(report_path):
     import json
     from pathlib import Path
     import wave
+    # 自检音频规格：24000Hz/16bit 单声道 0.2 秒静音；播放链路期望 21600 帧。
+    _CHECK_SR, _CHECK_FRAMES, _CHECK_PLAY_FRAMES, _CHECK_MP3_MIN = 24000, 2400, 21600, 100
     checks = []
     try:
         import components
@@ -31,12 +33,12 @@ def installation_check(report_path):
         with wave.open(buf, 'wb') as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
-            wav.setframerate(24000)
-            wav.writeframes(b'\0\0' * 2400)
+            wav.setframerate(_CHECK_SR)
+            wav.writeframes(b'\0\0' * _CHECK_FRAMES)
         mp3, pcm = docutils.prepare_playback_audio(buf.getvalue())
-        assert len(mp3) > 100
+        assert len(mp3) > _CHECK_MP3_MIN
         with wave.open(io.BytesIO(pcm), 'rb') as wav:
-            assert wav.getnframes() == 21600
+            assert wav.getnframes() == _CHECK_PLAY_FRAMES
         checks.append('ffmpeg-export-and-playback')
         import pypdf
         import pypdfium2
@@ -302,7 +304,7 @@ def main():
     ap.add_argument("--installation-check", metavar="REPORT_JSON")
     ap.add_argument('--install-component', nargs=2, metavar=('NAME', 'ZIP'))
     ap.add_argument("--server", action="store_true")
-    ap.add_argument("--port", type=int, default=appmeta.DEFAULT_PORT, help="端口号")
+    ap.add_argument("--port", type=int, default=None, help="端口号（默认读已保存配置，否则 8774）")
     args = ap.parse_args()
     modes = [bool(args.install_component), args.version, args.smoke_test,
              bool(args.installation_check), args.server]
@@ -326,11 +328,16 @@ def main():
     if args.installation_check:
         return installation_check(args.installation_check)
     if args.server:
-        if not 1 <= args.port <= 65535:
-            ap.error('端口号必须在 1～65535 之间')
         import engine
         import forward_server
         cfg = engine.load_json(engine.CONFIG_FILE, {})
+        raw_port = args.port if args.port is not None else cfg.get("port", appmeta.DEFAULT_PORT)
+        try:
+            port = int(str(raw_port).strip())
+        except (TypeError, ValueError):
+            ap.error('端口号必须在 1～65535 之间')
+        if not 1 <= port <= 65535:
+            ap.error('端口号必须在 1～65535 之间')
         kind = engine.kind_of(cfg.get("engine", "Azure(填Key)"))
         key = cfg.get("key", "")
         region = cfg.get("region", "")
@@ -373,7 +380,6 @@ def main():
                 voice = table.get(person) or (person if person in table.values() else voice)
             except Exception:
                 pass  # 解析失败回退默认人声，转发服务仍可用
-        port = args.port
         try:
             forward_server.run_server(port, synth, vlist)
         except OSError as e:

@@ -31,8 +31,8 @@ def main():
         assert (app / 'SmartVoice.exe').is_file()
         assert (app / 'unins000.exe').is_file()
         assert not (app / 'config.json').exists(), 'Installer must not ship developer config'
-        assert not list(app.glob('voices_cache*.json')), 'Installer must not ship personal caches'
-        assert not (app / 'output').exists(), 'Installer must not ship output audio'
+        assert not list(app.rglob('voices_cache*.json')), 'Installer must not ship personal caches'
+        assert not list(app.rglob('output')), 'Installer must not ship output audio'
         report = work / 'installation-check.json'
         subprocess.run([str(app / 'SmartVoice.exe'), '--installation-check', str(report)],
                        check=True, timeout=120, env=env)
@@ -41,9 +41,11 @@ def main():
         if args.components:
             metadata = json.loads((args.components / 'components.json').read_text(encoding='utf-8'))
             # OCR先装先验，防止G2PW组件的公共依赖掩盖OCR包缺文件。
+            from urllib.parse import urlsplit, unquote
+            from pathlib import PurePosixPath
             for name in sorted(metadata['components'], key=lambda name: name != 'ocr'):
                 entry = metadata['components'][name]
-                archive = args.components / entry['url'].rsplit('/', 1)[-1]
+                archive = args.components / unquote(PurePosixPath(urlsplit(entry['url']).path).name)
                 if not archive.is_file():
                     parser.error(f'component archive not found: {archive.name}')
                 subprocess.run([str(app / 'SmartVoice.exe'), '--install-component', name, str(archive)],

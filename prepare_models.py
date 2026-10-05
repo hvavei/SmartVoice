@@ -15,22 +15,34 @@ REQUIRED = ('g2pw.onnx', 'POLYPHONIC_CHARS.txt', 'MONOPHONIC_CHARS.txt', 'config
 ZIP_MEMBERS = ('g2pw.onnx', 'POLYPHONIC_CHARS.txt', 'MONOPHONIC_CHARS.txt', 'config.py', 'version')
 
 
+def check_asset(target, name):
+    """单个资产检查：返回错误信息，无错返回 None（供自愈删除与严格校验共用）。"""
+    path = Path(target) / name
+    if not path.is_file() or path.stat().st_size == 0:
+        return f'G2PW 资产缺失: {name}'
+    if name == 'g2pw.onnx' and path.stat().st_size <= 10 * 1024**2:
+        return '模型文件异常过小，疑似错误页，请删除 g2pw.onnx 后重跑'
+    if name in ('bopomofo_to_pinyin_wo_tune_dict.json', 'char_bopomofo_dict.json'):
+        try:
+            json.loads(path.read_text(encoding='utf-8'))
+        except ValueError:
+            return f'G2PW 资产不是合法 JSON（{name}），请删除后重跑'
+    if name == 'vocab.txt':
+        try:
+            first = path.read_text(encoding='utf-8').splitlines()[0]
+        except (ValueError, IndexError):
+            return '词表异常，请删除 vocab.txt 后重跑'
+        if '[PAD]' not in first:
+            return '词表异常（首行无 [PAD]），请删除 vocab.txt 后重跑'
+    return None
+
+
 def validate_assets(target):
     """校验已落盘资产：缺失/空文件、异常模型、坏 JSON、坏词表一律明确报错。"""
-    target = Path(target)
-    missing = [n for n in REQUIRED
-               if not (target / n).is_file() or (target / n).stat().st_size == 0]
-    if missing:
-        raise RuntimeError('G2PW 资产缺失: ' + ', '.join(missing))
-    if (target / 'g2pw.onnx').stat().st_size <= 10 * 1024**2:
-        raise RuntimeError('模型文件异常过小，疑似错误页，请删除 g2pw.onnx 后重跑')
-    for name in ('bopomofo_to_pinyin_wo_tune_dict.json', 'char_bopomofo_dict.json'):
-        try:
-            json.loads((target / name).read_text(encoding='utf-8'))
-        except ValueError as e:
-            raise RuntimeError(f'G2PW 资产不是合法 JSON（{name}），请删除后重跑') from e
-    if '[PAD]' not in (target / 'vocab.txt').read_text(encoding='utf-8').splitlines()[0]:
-        raise RuntimeError('词表异常（首行无 [PAD]），请删除 vocab.txt 后重跑')
+    for name in REQUIRED:
+        error = check_asset(Path(target), name)
+        if error:
+            raise RuntimeError(error)
 
 
 def prepare():
@@ -55,7 +67,7 @@ def prepare():
         part.replace(path)
         sources[path.name] = url
 
-    if not all((target / n).is_file() and (target / n).stat().st_size > 0 for n in ZIP_MEMBERS):
+    if any(check_asset(target, n) is not None for n in ZIP_MEMBERS):
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / 'model.zip'
             download('https://storage.googleapis.com/esun-ai/g2pW/G2PWModel-v2-onnx.zip', archive)
@@ -68,6 +80,13 @@ def prepare():
                             shutil.copyfileobj(src, dst)
                         part.replace(target / base)
     repo = 'https://raw.githubusercontent.com/GitYCC/g2pW/master/'
+    for name in REQUIRED:
+        # 自愈：坏文件先删，后续按缺失重下，不再死循环报同一错。
+        if name not in ZIP_MEMBERS and check_asset(target, name) is not None:
+            try:
+                (target / name).unlink(missing_ok=True)
+            except OSError:
+                pass
     for name in ('bopomofo_to_pinyin_wo_tune_dict.json', 'bert-base-chinese_s2t_dict.txt',
                  'char_bopomofo_dict.json'):
         if (target / name).is_file() and (target / name).stat().st_size > 0:

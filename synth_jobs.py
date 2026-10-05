@@ -44,7 +44,7 @@ def run_jobs(ctx, seq, jobs, snap):
         if not ctx.is_current(seq) or halted.is_set():
             raise engine.SynthesisCancelled("合成已取消")
         voice, _, text = jobs[index]
-        token = snap.get('_cancel', ctx.token())
+        token = snap.get('_cancel') or ctx.token()
         token.check()
         key = workflow.fingerprint(text, voice, snap)
         cached = ctx.cache.load(key)

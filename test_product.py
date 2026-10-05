@@ -16,13 +16,27 @@ class StorageTests(unittest.TestCase):
     def test_dpapi_settings_round_trip_and_forget(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(storage, 'DATA_DIR', Path(tmp)):
             cfg = {'engine': 'Azure(填Key)', 'remember_key': True, 'key': 'secret-123',
-                   'engine_profiles': {'azure': {'key': 'secret-123', 'region': 'eastasia'}}}
+                   'engine_profiles': {'azure': {'key': 'secret-123', 'region': 'eastus'}}}
             protected = storage.protect_settings(cfg)
             self.assertNotIn('secret-123', json.dumps(protected))
             self.assertNotIn('secret-123', (Path(tmp)/'credentials.json').read_text(encoding='utf-8'))
             self.assertEqual(storage.unlock_settings(protected)['key'], 'secret-123')
             cfg['remember_key'] = False
             self.assertEqual(storage.unlock_settings(storage.protect_settings(cfg))['key'], '')
+
+    def test_unremembered_key_clears_vault(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(storage, 'DATA_DIR', Path(tmp)):
+            cfg = {'engine': 'Azure(填Key)', 'remember_key': True, 'key': 's1',
+                   'engine_profiles': {'azure': {'key': 's1', 'region': 'eastus'}}}
+            storage.protect_settings(cfg)
+            self.assertIn('azure', storage.read_json(Path(tmp)/'credentials.json'))
+            cfg2 = {'engine': 'Azure(填Key)', 'remember_key': False, 'key': '',
+                    'engine_profiles': {'azure': {'key': '', 'region': 'eastus',
+                                                 'credential_ref': 'azure'}}}
+            out = storage.protect_settings(cfg2)
+            self.assertEqual(storage.read_json(Path(tmp)/'credentials.json'), {})
+            self.assertNotIn('credential_ref', out['engine_profiles']['azure'])
+            self.assertEqual(storage.unlock_settings(out)['key'], '')
 
     def test_unique_export_never_overwrites_existing(self):
         with tempfile.TemporaryDirectory() as tmp:

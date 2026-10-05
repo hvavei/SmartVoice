@@ -110,6 +110,15 @@ def dpapi(data, decrypt=False):
 def protect_settings(cfg):
     cfg = copy.deepcopy(cfg)
     profiles = cfg.setdefault('engine_profiles', {})
+    if not cfg.get('remember_key'):
+        # 用户明确不记住：凭据库整体清空，残留引用一并摘除（与“DPAPI瞬时失败保留旧条目”区分）。
+        atomic_json(DATA_DIR / 'credentials.json', {})
+        cfg.pop('key', None)
+        for profile in profiles.values():
+            if isinstance(profile, dict):
+                profile.pop('key', None)
+                profile.pop('credential_ref', None)
+        return cfg
     with _vault_lock:
         old = read_json(DATA_DIR / 'credentials.json')
         old = old if isinstance(old, dict) else {}

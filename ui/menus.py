@@ -5,13 +5,13 @@ import webbrowser
 
 import appmeta
 import theme
-from theme import FG, PANEL, SEL
 
 
 def build_product_menu(app):
     mfont = app._menu_font()
     bar = tk.Menu(app.root, font=mfont)
-    menu_colors = dict(bg=PANEL, fg=FG, activebackground=SEL, activeforeground=FG)
+    menu_colors = dict(bg=theme.PANEL, fg=theme.FG,
+                       activebackground=theme.SEL, activeforeground=theme.FG)
 
     def submenu(parent=None):
         return tk.Menu(parent or bar, tearoff=False, font=mfont, **menu_colors)

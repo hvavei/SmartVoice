@@ -113,7 +113,10 @@ class ProductUI:
 
     def _schedule_editor_info(self):
         if self._editor_after:
-            self.root.after_cancel(self._editor_after)
+            try:
+                self.root.after_cancel(self._editor_after)
+            except tk.TclError:
+                pass
         self._editor_after = self.root.after(180, self._refresh_editor_info)
 
     def _refresh_editor_info(self):

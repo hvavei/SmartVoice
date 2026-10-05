@@ -89,6 +89,8 @@ def audit_voices(config, output=None):
     """官方列表与本地缓存逐 ID 对照；不根据名称后缀猜测 VoiceType。"""
     from collections import Counter
     _, key, region, _, _ = configuration(config)
+    if not key:
+        raise SystemExit("诊断配置没有 Azure Key")
     url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/voices/list"
     start = time.perf_counter()
     with requests.get(url, headers={"Ocp-Apim-Subscription-Key": key}, timeout=HTTP_LONG_TIMEOUT) as response:
@@ -195,7 +197,7 @@ def run(config, output, live=False, direct=False, voice_override=None, native_on
         Path(output, "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=engine.CONFIG_FILE)
     parser.add_argument("--output")
@@ -206,11 +208,13 @@ if __name__ == "__main__":
     parser.add_argument("--transcribe", action="store_true")
     parser.add_argument("--voices", action="store_true")
     parser.add_argument("--refresh-cache", action="store_true", help="从官方列表更新指定配置目录的 Azure 人声及类型缓存")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.live and not args.output:
         parser.error("--live requires --output")
     if args.refresh_cache:
         _, key, region, endpoint, _ = configuration(args.config)
+        if not key:
+            parser.error("诊断配置没有 Azure Key")
         engine.APP_DIR = str(cache_directory(args.config))
         table = engine.refresh_voices_azure(key, region, endpoint)
         print(json.dumps({'region': region, 'official_voices_saved': len(table)}, ensure_ascii=True))
@@ -222,3 +226,7 @@ if __name__ == "__main__":
         transcribe_samples(args.config, args.output)
     else:
         run(args.config, args.output, args.live, args.direct, args.voice, args.native_only)
+
+
+if __name__ == "__main__":
+    main()

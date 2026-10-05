@@ -59,17 +59,17 @@ def reflow_text(text):
     out, para = [], []
 
     def flush():
-        merged = ''
+        merged = []
         for piece in para:
             if not merged:
-                merged = piece
-            elif (merged[-1].isascii() and (merged[-1].isalnum() or merged[-1] in ',;:')
+                merged = [piece]
+            elif (merged[-1][-1:].isascii() and (merged[-1][-1:].isalnum() or merged[-1][-1:] in ',;:')
                   and piece[:1].isascii() and piece[:1].isalnum()):
-                merged += ' ' + piece
+                merged.append(' ' + piece)
             else:
-                merged += piece
+                merged.append(piece)
         if merged:
-            out.append(merged)
+            out.append(''.join(merged))
         para.clear()
 
     for raw in text.split('\n'):
@@ -95,19 +95,28 @@ def read_document(path):
     extension = Path(path).suffix.lower()
     if extension == '.pdf':
         import docutils
-        return reflow_text(_normalize_newlines(docutils.extract_pdf_text(path, ocr=True)))
+        text = _normalize_newlines(docutils.extract_pdf_text(path, ocr=True))
+        if len(text) > MAX_TEXT_BYTES:
+            raise ValueError('文档过大（超过32MB），请拆分后导入')
+        return reflow_text(text)
     if extension == '.docx':
         import zipfile
         import xml.etree.ElementTree as ET
+        import storage
         try:
-            with zipfile.ZipFile(path) as z:
+            with zipfile.ZipFile(storage.long_path(path)) as z:
+                if sum(i.file_size for i in z.infolist()) > MAX_TEXT_BYTES:
+                    raise ValueError('文档过大（超过32MB），请拆分后导入')
                 try:
                     data = z.read('word/document.xml')
                 except KeyError:
                     raise ValueError('DOCX 缺少正文，请另存后导入')
         except zipfile.BadZipFile as e:
             raise ValueError('DOCX 已损坏，请另存后导入') from e
-        root = ET.fromstring(data)
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError as e:
+            raise ValueError('DOCX 已损坏，请另存后导入') from e
         ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
         if not list(root.iter(ns + 'p')):
             strict = '{http://purl.oclc.org/ooxml/wordprocessingml/main}'

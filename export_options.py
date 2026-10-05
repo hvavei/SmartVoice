@@ -29,8 +29,13 @@ def _to_str(value, default):
 
 def validate_export_options(directory, name, fmt, leading_ms, trailing_ms, normalize):
     """严格版：类型/范围非法抛 ValueError，错误文案与旧内联逻辑一致。"""
+    try:
+        leading_ms = int(leading_ms)
+        trailing_ms = int(trailing_ms)
+    except (TypeError, ValueError):
+        raise ValueError('首尾留白范围为0～5000毫秒')
     options = {'directory': directory, 'name': name, 'format': str(fmt).lower(),
-               'leading_ms': int(leading_ms), 'trailing_ms': int(trailing_ms),
+               'leading_ms': leading_ms, 'trailing_ms': trailing_ms,
                'normalize': bool(normalize)}
     if options['format'] not in FORMATS or not options['directory']:
         raise ValueError('请设置有效输出目录和 MP3/WAV 格式')

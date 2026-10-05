@@ -4,6 +4,7 @@ BTN_W = 16  # 标准功能按钮宽度(字符数)
 # SLOT_AUD_W/MAX_DUB/FILTERS/gender_of 随面板搬入 ui 包，此处经由 import 重导出以兼容旧引用。
 import os
 import re
+import hashlib
 import subprocess
 import sys
 import threading
@@ -161,7 +162,10 @@ class App(ProductUI):
         self._config_store.shutdown(wait=False)
         self._synth_pool.shutdown(wait=False, cancel_futures=True)
         for timer in self.root.tk.splitlist(self.root.tk.call("after", "info")):
-            self.root.after_cancel(timer)
+            try:
+                self.root.after_cancel(timer)
+            except tk.TclError:
+                pass  # 快照后已触发的定时器无需再取消
         if self.server:
             self.server.shutdown()
             self.server.server_close()
@@ -242,8 +246,6 @@ class App(ProductUI):
         s.configure("TButton", background=PANEL, foreground=FG, borderwidth=1,
                     bordercolor=BORDER, padding=6)
         s.map("TButton", background=[("active", HOVER)], bordercolor=[("active", ACCENT)])
-        s.configure("Accent.TButton", background=ACCENT, foreground="white", borderwidth=0, padding=6)
-        s.map("Accent.TButton", background=[("active", ACCENT_D)])
         s.configure("Tool.TButton", background=PANEL, foreground=FG,
                     borderwidth=1, bordercolor=BORDER, padding=6)
         s.map("Tool.TButton", background=[("active", HOVER)],
@@ -289,11 +291,11 @@ class App(ProductUI):
         iy = max(1, round(2 * z))     # 内层/按钮栏纵向
         return px, py, ix, iy
 
-    def _mkbtn(self, parent, text, cmd, accent=False, width=BTN_W):
+    def _mkbtn(self, parent, text, cmd, width=BTN_W):
         # 所有操作按钮共用一套样式；长按钮使用标准宽度，紧凑操作只收窄宽度。
         return ttk.Button(parent, text=text,
                           width=max(4, round(width * self._zx())), command=cmd,
-                          style="Accent.TButton" if accent else "TButton")
+                          style="TButton")
 
     def _on_root_resize(self, event):
         # 只响应顶层窗口自身尺寸变化, 子控件变化直接忽略防抖动死循环
@@ -389,10 +391,12 @@ class App(ProductUI):
         self.rebuild_list()
         self._build_product_menu()
         self._schedule_editor_info()
-        # 配置输入即暂存(_save_cfg 内去抖)；Key 另带未记住提示。程序赋值走显式 _save_cfg，不经 trace。
-        self.key_var.trace_add("write", self._on_key_edited)
-        for var in (self.region_var, self.ep_var, self.port_var):
-            var.trace_add("write", lambda *a: self._save_cfg())
+        # 配置输入即暂存(_save_cfg 内去抖)；Key 另带未记住提示。变量常驻，trace 只加一次。
+        if not getattr(self, "_cfg_traced", False):
+            self.key_var.trace_add("write", self._on_key_edited)
+            for var in (self.region_var, self.ep_var, self.port_var):
+                var.trace_add("write", lambda *a: self._save_cfg())
+            self._cfg_traced = True
 
     def _fit_text_toolbar(self):
         try:
@@ -801,6 +805,14 @@ class App(ProductUI):
                 update(child)
         self._refont_menus()
         self._save_cfg()
+        try:
+            # 几何尺寸构建时按 zoom 求值，缩放后同步跟上（字体已在 update 中处理）。
+            self.prog.configure(width=max(120, round(150 * self._zx())),
+                                height=max(9, round(11 * self._zx())))
+            self.text.configure(padx=max(8, round(10 * self._zx())),
+                                pady=max(4, round(6 * self._zx())))
+        except tk.TclError:
+            pass
         self._reflow_all()
 
     def switch_theme(self, name):
@@ -1465,8 +1477,12 @@ class App(ProductUI):
 
     def _stop_playback(self):
         if self._play_watch:
-            self.root.after_cancel(self._play_watch)
-            self._play_watch = None
+            try:
+                self.root.after_cancel(self._play_watch)
+            except tk.TclError:
+                pass
+            finally:
+                self._play_watch = None
         self.player.stop()
         if self._playing_pcm and self._playing_pcm != self._last_pcm:
             self._discard_pcm(self._playing_pcm)
@@ -1482,6 +1498,14 @@ class App(ProductUI):
                 raise ValueError(f'角色 [{label}]：{e}') from e
         self._task_export = self._export_options()
         self._task_preview = preview
+        try:
+            import components
+            if components.available('g2pw'):
+                # 注音可用性参与指纹：装上组件后旧（未注音）缓存不得继续命中；
+                # 无组件时不加键，保持与历史缓存一致，不做全量失效。
+                snap['annotate'] = True
+        except Exception:
+            pass
         if not preview:
             for voice, _, body in jobs:
                 key = workflow.fingerprint(body, voice, snap)
@@ -1610,8 +1634,14 @@ class App(ProductUI):
         except Exception as e:
             return self._fail(str(e))
         snap["audition"] = True  # 固定短句无须加载多音字模型，保持 Azure 原生问句韵律。
+        # 试听缓存键脱敏：Key/端点只存哈希（与指纹的 credential_scope 同理），内存不留明文。
+        redacted = dict(snap)
+        if redacted.get('key'):
+            redacted['key'] = hashlib.sha256(str(redacted['key']).encode()).hexdigest()
+        if redacted.get('ep'):
+            redacted['ep'] = hashlib.sha256(str(redacted['ep']).encode()).hexdigest()
         cache_key = (AUDITION_TEXT, voice_id,
-                     tuple(sorted((k, v) for k, v in snap.items() if k not in ("person", "voice"))),
+                     tuple(sorted((k, v) for k, v in redacted.items() if k not in ("person", "voice"))),
                      tuple(sorted(self._export_options_safe().items())))
         if self.busy and getattr(self, "_audition_pending_key", None) == cache_key:
             return  # 同一试听请求尚未完成，连续双击不重复请求/重置进度。
@@ -1973,10 +2003,9 @@ class App(ProductUI):
 
     def _filtered_items(self):
         g = self.gender_var.get()
-        vals = [(k, v) for k, v in self.voices.items()
+        return [(k, v) for k, v in self.voices.items()
                 if want_voice(self.filter_var.get(), v)
                 and (g == "全部" or gender_of(k) == g)]
-        return vals or list(self.voices.items())
 
     def rebuild_list(self):
         self._rebuilding = True
@@ -1987,6 +2016,8 @@ class App(ProductUI):
                 return
             self._iid = {}
             vals = self._filtered_items()
+            if not vals:
+                self.status.config(text="无匹配人声")
             sel_iid = None
             for display, vid in vals:
                 iid = self.tree.insert("", "end", values=(gender_of(display), display.split()[0], vid))
@@ -2086,6 +2117,8 @@ class App(ProductUI):
         try:
             snap = self.snapshot()
             port = int(self.port_var.get().strip())
+            if not 1 <= port <= 65535:
+                raise ValueError("端口号必须在 1～65535 之间")
         except Exception as e:
             return self._fail(str(e))
 

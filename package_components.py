@@ -13,7 +13,7 @@ COMMON = ('numpy', 'numpy.libs', 'onnxruntime', 'tokenizers')
 OCR = ('cv2', 'rapidocr_onnxruntime', 'shapely', 'shapely.libs', 'pyclipper', 'yaml')
 ABI = f'cp{sys.version_info.major}{sys.version_info.minor}-win-amd64'
 ZIP_COMPRESSLEVEL = 3  # 组件包体积与解包速度的折中
-UNPACKED_SLACK = 65536  # 允许 zip 元数据与实际展开的字节误差
+# 展开体积容差只在 components.install_archive 安装校验时使用，定义见 components.UNPACKED_SLACK。
 
 
 def optional(name):

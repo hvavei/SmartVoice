@@ -211,9 +211,9 @@ def main():
         print('Self-signed certificate thumbprint:', args.certificate_thumbprint, flush=True)
     import package_components
     standard = package_components.package(stage, work, release)
-    signed = False
+    signed = True
     for edition, folder in (('Standard', standard), ('Full', stage)):
-        signed = sign_file(folder / 'SmartVoice.exe', args)
+        signed = sign_file(folder / 'SmartVoice.exe', args) and signed
         subprocess.run([str(compiler), f'/DSourceDir={folder}', f'/DOutputDir={release}', f'/DEdition={edition}',
                         str(ROOT / 'installer.iss')], cwd=ROOT, check=True)
         sign_file(release / f'SmartVoice-Setup-{edition}.exe', args)

@@ -39,8 +39,8 @@ def extract_pdf_text(path, ocr=False):
     if ocr and needs_ocr:
         try:
             ocr_map = _ocr_pages(path, needs_ocr)
-        except RuntimeError as e:
-            # 缺组件/模型损坏：已有文本页照常返回，不整篇作废；全空才明确报错。
+        except (RuntimeError, ImportError, OSError) as e:
+            # 缺组件/模型损坏/依赖缺失：已有文本页照常返回，不整篇作废；全空才明确报错。
             if all(not text for text in pages_text):
                 raise RuntimeError(f'OCR 不可用（{e}），扫描页无法导入') from e
             ocr_map = {}
@@ -121,7 +121,10 @@ def ocr_paragraphs(rows):
 
 
 def _ffmpeg_path():
-    import imageio_ffmpeg
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        raise RuntimeError('FFmpeg 缺失，无法合成音频') from None
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
@@ -188,4 +191,7 @@ def _run(ffmpeg, args):
     except subprocess.TimeoutExpired:
         raise RuntimeError('ffmpeg 超时（超过10分钟）已中止，请检查输入音频是否异常') from None
     if p.returncode != 0:
-        raise RuntimeError(f"ffmpeg 失败: {p.stderr.decode(errors='ignore')[-400:]}")
+        import re
+        detail = re.sub(r'[A-Za-z]:\\[^"\s]*|\\\\[^"\s]*', '<path>',
+                        p.stderr.decode(errors='ignore')[-400:])
+        raise RuntimeError(f"ffmpeg 失败: {detail}")

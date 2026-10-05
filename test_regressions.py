@@ -326,6 +326,24 @@ class EngineTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "TimeoutError"):
                 engine.synth_edge("你好", "zh-CN-YunxiNeural", attempts=1)
 
+    def test_stalled_stream_closes_generator(self):
+        import asyncio
+        import inspect
+        import engine as engine_mod
+
+        async def body():
+            async def hanging():
+                yield {"x": 1}
+                await asyncio.sleep(3600)
+
+            gen = hanging()
+            with self.assertRaises(TimeoutError):
+                async for _ in engine_mod._stream_chunks(gen, 0.05):
+                    pass
+            self.assertEqual(inspect.getasyncgenstate(gen), 'AGEN_CLOSED')
+
+        asyncio.run(body())
+
 
 class DocumentReflowTests(unittest.TestCase):
     def test_soft_wrapped_lines_merge_into_paragraphs(self):
@@ -407,6 +425,52 @@ class DocumentTests(unittest.TestCase):
         with patch('pypdf.PdfReader', return_value=Mock(pages=pages)), \
                 patch.object(docutils, '_ocr_pages', return_value={1: '第二页'}):
             self.assertEqual(docutils.extract_pdf_text('unused', ocr=True), '第一页\n\n第二页\n\n第三页')
+
+    def test_srt_inequality_not_stripped_as_tag(self):
+        import documents
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 's.srt'
+            path.write_text('1\n00:00:01,000 --> 00:00:02,000\n3 < 5 > 2\n\n'
+                            '2\n00:00:03,000 --> 00:00:04,000\n<b>加粗</b>正文\n',
+                            encoding='utf-8')
+            text = documents.read_document(path)
+        self.assertIn('3 < 5 > 2', text)
+        self.assertIn('加粗正文', text)
+        self.assertNotIn('<b>', text)
+
+    def test_lrc_extended_tags_stripped(self):
+        import documents
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 's.lrc'
+            path.write_text('[LENGTH:03:45]\n[TI:标题]\n[01:02:03.00]歌词\n[00:04.00]第二句\n',
+                            encoding='utf-8')
+            lines = documents.read_document(path).split('\n')
+        self.assertEqual(lines, ['', '', '歌词', '第二句', ''])
+
+    def test_docx_truncated_xml_rejected(self):
+        import documents
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / 'cut.docx'
+            with zipfile.ZipFile(bad, 'w') as z:
+                z.writestr('word/document.xml', '<w:document><w:body><w:p>')
+            with self.assertRaisesRegex(ValueError, '损坏'):
+                documents.read_document(bad)
+
+    def test_oversized_documents_rejected(self):
+        import documents
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            big = tmp / 'big.docx'
+            with zipfile.ZipFile(big, 'w', compression=zipfile.ZIP_STORED) as z:
+                for i in range(33):
+                    z.writestr(f'f{i}.txt', 'x' * (1024 * 1024))
+                z.writestr('word/document.xml',
+                           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                           '<w:body><w:p><w:r><w:t>hi</w:t></w:r></w:p></w:body></w:document>')
+            with self.assertRaisesRegex(ValueError, '过大'):
+                documents.read_document(big)
 
 
 class PolyphoneTests(unittest.TestCase):
@@ -1199,6 +1263,99 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(a._cfg_pending['export']['leading_ms'], 5000)
         self.assertEqual(a._cfg_pending['export']['directory'], '')
 
+    def test_config_traces_not_duplicated_after_rebuilds(self):
+        import theme
+        a = self.app
+        for var in (a.key_var, a.region_var, a.ep_var, a.port_var):
+            self.assertEqual(len(var.trace_info()), 1)
+        try:
+            a.switch_theme('mist')
+            self.root.update()
+            a.switch_theme('warm')
+            self.root.update()
+            for var in (a.key_var, a.region_var, a.ep_var, a.port_var):
+                self.assertEqual(len(var.trace_info()), 1)
+        finally:
+            if theme.ACTIVE != 'warm':
+                a.switch_theme('warm')
+                self.root.update()
+
+    def test_toggle_server_rejects_bad_port(self):
+        a = self.app
+        a.selected = next(iter(a.voices))
+        a.key_var.set('k')
+        for bad in ('99999', '0'):
+            a.port_var.set(bad)
+            a.toggle_server()
+            self.assertIsNone(a.server)
+            self.assertIn('端口', str(a.status.cget('text')))
+        a.port_var.set('abc')  # 非数字：int 转换失败同样不得启动服务
+        a.toggle_server()
+        self.assertIsNone(a.server)
+
+    def test_empty_filter_shows_no_match_message(self):
+        a = self.app
+        a.voices = {'A女': 'zh-CN-XiaoxiaoNeural'}
+        a.filter_var.set('日语ja')
+        a.gender_var.set('男')
+        a.rebuild_list()
+        self.assertEqual(a.tree.get_children(), ())
+        self.assertEqual(str(a.status.cget('text')), '无匹配人声')
+
+    def test_theme_switch_recolors_menus(self):
+        import theme
+        a = self.app
+
+        def project_bg():
+            menubar = a.root.nametowidget(a.root.cget('menu'))
+            project = menubar.nametowidget(menubar.entrycget(0, 'menu'))
+            return str(project.cget('bg'))
+
+        try:
+            a.switch_theme('mist')
+            self.root.update()
+            self.assertEqual(project_bg(), theme.THEMES['mist']['PANEL'])
+        finally:
+            a.switch_theme('warm')
+            self.root.update()
+
+    def test_zoom_updates_panel_geometry(self):
+        a = self.app
+        a.zoom_var.set(150)
+        a.on_zoom()
+        self.assertEqual(int(a.prog.cget('width')), max(120, round(150 * 1.5)))
+        self.assertEqual(int(a.prog.cget('height')), max(9, round(11 * 1.5)))
+        self.assertEqual(int(a.text.cget('padx')), max(8, round(10 * 1.5)))
+        a.zoom_var.set(100)
+        a.on_zoom()
+
+    def test_audition_cache_key_hides_credentials(self):
+        a = self.app
+        snap = {'engine': 'Azure(填Key)', 'voice': 'v', 'key': 'SECRET-KEY',
+                'ep': 'https://x/v1', 'region': 'eastus', 'rate': '100%', 'pitch': '+0Hz',
+                'vol': '+0%', 'style': '默认', 'degree': '100%', 'role': '默认'}
+        with patch.object(a, 'snapshot', return_value=dict(snap)):
+            a._audition_voice('显示', 'vid')
+        blob = repr(a._audition_pending_key)
+        self.assertNotIn('SECRET-KEY', blob)
+        self.assertNotIn('https://x/v1', blob)
+
+    def test_begin_task_sets_annotate_when_g2pw_available(self):
+        a = self.app
+        jobs = [('v', 'r', 'hi')]
+        with patch('components.available', return_value=True), \
+                patch.object(engine, 'validate_voice_parameters'):
+            snap = {'engine': 'Azure(填Key)', 'voice': 'v'}
+            a._begin_task(jobs, snap, 'hi')
+            self.assertTrue(snap.get('annotate'))
+            a._complete_task('cancelled')
+            snap2 = {'engine': 'Azure(填Key)', 'voice': 'v'}
+        with patch('components.available', return_value=False), \
+                patch.object(engine, 'validate_voice_parameters'):
+            a._begin_task(jobs, snap2, 'hi')
+            self.assertNotIn('annotate', snap2)
+            a._complete_task('cancelled')
+
 
 class StabilityTests(unittest.TestCase):
     def test_segment_cache_capacity_prunes_oldest_pairs(self):
@@ -1212,6 +1369,28 @@ class StabilityTests(unittest.TestCase):
             cache.save(k2, b'y' * 100)
             self.assertIsNone(cache.load(k1))          # 最旧片段成对淘汰
             self.assertEqual(cache.load(k2), b'y' * 100)
+
+    def test_prune_collects_orphan_audio_without_json(self):
+        import os
+        import time
+        import voice_tasks as workflow
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = workflow.SegmentCache(Path(tmp) / 'cache')
+            cache.root.mkdir(parents=True, exist_ok=True)
+            orphan_old = cache.root / ('o' * 64 + '.audio')
+            orphan_old.write_bytes(b'orphan')
+            fresh = cache.root / ('f' * 64 + '.audio')
+            fresh.write_bytes(b'fresh')
+            paired = cache.root / ('p' * 64 + '.audio')
+            paired.write_bytes(b'paired')
+            (cache.root / ('p' * 64 + '.json')).write_text('{}', encoding='utf-8')
+            old = time.time() - 4000
+            os.utime(orphan_old, (old, old))
+            cache._prune_at = 0
+            cache._prune()
+            self.assertFalse(orphan_old.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(paired.exists())
 
     def test_forward_server_caps_body_and_text_with_timeout(self):
         import http.client
@@ -1629,6 +1808,15 @@ class DeepRegressionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'OCR 不可用'):
                 docutils.extract_pdf_text('unused', ocr=True)
 
+    def test_ocr_dependency_failure_keeps_text_pages(self):
+        import docutils
+        pages = [Mock()]
+        pages[0].extract_text.return_value = '文本页'
+        for error in (ImportError('no numpy'), OSError('dll load failed')):
+            with patch('pypdf.PdfReader', return_value=Mock(pages=pages)), \
+                    patch.object(docutils, '_ocr_pages', side_effect=error):
+                self.assertEqual(docutils.extract_pdf_text('unused', ocr=True), '文本页')
+
     def test_cli_modes_are_mutually_exclusive(self):
         import main as entry
         with patch.object(sys, 'argv', ['SmartVoice', '--version', '--server']):
@@ -1655,6 +1843,46 @@ class DeepRegressionTests(unittest.TestCase):
             data = json.loads(report.read_text(encoding='utf-8'))
             self.assertTrue(data['ok'])
             self.assertIn('theme-and-menu-present', data['checks'])
+
+    def test_server_uses_saved_port_when_flag_absent(self):
+        import main as entry
+        seen = {}
+        cfg = {'engine': 'Edge免费(免Key)', 'port': '9111'}
+        with patch.object(sys, 'argv', ['SmartVoice', '--server']), \
+                patch.object(engine, 'load_json', return_value=dict(cfg)), \
+                patch('forward_server.run_server',
+                      side_effect=lambda port, s, v: seen.setdefault('port', port)):
+            entry.main()
+            self.assertEqual(seen['port'], 9111)
+        with patch.object(sys, 'argv', ['SmartVoice', '--server', '--port', '9222']), \
+                patch.object(engine, 'load_json', return_value=dict(cfg)), \
+                patch('forward_server.run_server',
+                      side_effect=lambda port, s, v: seen.setdefault('port2', port)):
+            entry.main()
+            self.assertEqual(seen['port2'], 9222)
+
+    def test_diagnose_without_key_fails_fast(self):
+        import diagnose_azure
+        with patch.object(diagnose_azure, 'configuration',
+                          return_value=({}, '', 'eastus', 'https://x/v1', 'v')):
+            with self.assertRaises(SystemExit):
+                diagnose_azure.audit_voices('cfg')
+            with patch.object(sys, 'argv', ['diagnose_azure.py', '--refresh-cache',
+                                            '--config', 'cfg']):
+                with self.assertRaises(SystemExit) as cm:
+                    diagnose_azure.main()
+                self.assertEqual(cm.exception.code, 2)
+
+    def test_ffmpeg_error_hides_paths(self):
+        import docutils
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / 'fake_ffmpeg.py'
+            script.write_text('import sys; sys.stderr.write("C:\\\\Users\\\\x\\\\tmp\\\\a.bin: bad"); sys.exit(1)',
+                              encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError, 'ffmpeg 失败') as cm:
+                docutils._run(sys.executable, [str(script)])
+            self.assertNotIn('C:\\Users', str(cm.exception))
+            self.assertIn('<path>', str(cm.exception))
 
 
 class TaskManagerTests(unittest.TestCase):
@@ -1727,6 +1955,11 @@ class ExportPlaybackTests(unittest.TestCase):
                                "leading_ms": 350, "trailing_ms": 450, "normalize": True})
         out = coerce_export_options("not-a-dict")
         self.assertEqual(out["format"], "mp3")
+
+    def test_validate_none_values_use_error_message(self):
+        from export_options import validate_export_options
+        with self.assertRaisesRegex(ValueError, '首尾留白'):
+            validate_export_options("D:/out", "x", "mp3", None, 450, False)
 
 
 class PrepareTests(unittest.TestCase):
@@ -1854,6 +2087,12 @@ class SynthJobsTests(unittest.TestCase):
         kinds = [k for k, s, p in events]
         self.assertIn("cache_segment", kinds)
         self.assertIn("segment", kinds)
+
+    def test_explicit_none_token_falls_back(self):
+        from synth_jobs import run_jobs
+        ctx, events, store = self._ctx(lambda text, seg, voice, **kw: text.encode())
+        snap = {"engine": "Edge免费(免Key)", "_cancel": None}
+        self.assertEqual(run_jobs(ctx, 4, [("v", "r", "x")], snap), [b"x"])
 
     def test_parallel_bounded_and_ordered(self):
         import threading

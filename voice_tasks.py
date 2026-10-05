@@ -273,6 +273,15 @@ class SegmentCache:
                         json_path.unlink()
                 except OSError:
                     pass
+            # 镜像分支：.json 缺失残留超过1小时的 .audio（save 先写 audio 后写 json，崩溃夹中间）。
+            for audio in self.root.glob('*.audio'):
+                if audio.with_suffix('.json').exists():
+                    continue
+                try:
+                    if now - audio.stat().st_mtime > 3600:
+                        audio.unlink()
+                except OSError:
+                    pass
             for temp in self.root.glob('tmp*'):
                 try:
                     if temp.is_file() and now - temp.stat().st_mtime > 3600:

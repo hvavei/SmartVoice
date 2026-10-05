@@ -64,6 +64,8 @@ def installed_root(name):
         return ROOT
     entry = _entry(name)
     pointer = storage.read_json(COMPONENT_DIR / f'{name}.json')
+    if not isinstance(pointer, dict):
+        raise MissingComponent(f'尚未安装{NAMES[name]}；请到“组件 → 管理组件”下载或导入组件包')
     if pointer.get('sha256') == entry['sha256'] and pointer.get('folder') == f"{name}-{entry['sha256'][:16]}":
         path = COMPONENT_DIR / pointer['folder']
         if (path / 'component.json').is_file():
@@ -107,7 +109,7 @@ def activate(name):
         _dll_handles.extend(handles)
         _activated.add(name)
         # 回收同名旧版本组件目录（升级后的残留；例如 G2PW 约 700MB）
-        if root != ROOT and isinstance(root, Path):
+        if root != ROOT:
             for d in COMPONENT_DIR.glob(f'{name}-*'):
                 if d.is_dir() and d.resolve() != root.resolve() and str(d) not in sys.path:
                     shutil.rmtree(d, ignore_errors=True)
@@ -153,7 +155,10 @@ def install_archive(name, archive_path, progress=None, cancelled=None):
                 names.add(i.filename)
                 if not (staging / i.filename).resolve().is_relative_to(staging.resolve()):
                     raise ValueError('组件包含越界路径')
-            manifest = json.loads(z.read('component.json'))
+            try:
+                manifest = json.loads(z.read('component.json'))
+            except KeyError:
+                raise ValueError('组件标识不匹配')
             if manifest.get('name') != name or manifest.get('abi') != ABI:
                 raise ValueError('组件标识不匹配')
             for index, i in enumerate(infos):

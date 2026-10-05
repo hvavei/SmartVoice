@@ -242,12 +242,20 @@ async def _stream_chunks(stream, timeout):
     """逐块限时取流：卡死的连接按块超时抛出 TimeoutError，走外层重试；正常流不受影响。"""
     import asyncio
     it = stream.__aiter__()
-    while True:
-        try:
-            chunk = await asyncio.wait_for(it.__anext__(), timeout)
-        except StopAsyncIteration:
-            return
-        yield chunk
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(it.__anext__(), timeout)
+            except StopAsyncIteration:
+                return
+            yield chunk
+    finally:
+        aclose = getattr(it, 'aclose', None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:
+                pass
 
 
 def region_of_endpoint(endpoint):
@@ -664,18 +672,27 @@ def synth_edge(text, voice_id, rate="+0%", pitch="+0Hz", volume="+0%", attempts=
             comm = edge_tts.Communicate(text=text, voice=voice_id, rate=rate,
                                         pitch=pitch, volume=volume)
             buf = bytearray()
-            async for chunk in _stream_chunks(comm.stream(), EDGE_CHUNK_TIMEOUT):
-                if chunk["type"] == "audio":
-                    if not buf and on_stage:
-                        on_stage("接收音频")
-                    buf.extend(chunk["data"])
-                    if on_progress:
-                        try:
-                            on_progress(len(buf), 0)
-                        except workflow.Cancelled:
-                            raise
-                        except Exception:
-                            pass
+            gen = comm.stream()
+            try:
+                async for chunk in _stream_chunks(gen, EDGE_CHUNK_TIMEOUT):
+                    if chunk["type"] == "audio":
+                        if not buf and on_stage:
+                            on_stage("接收音频")
+                        buf.extend(chunk["data"])
+                        if on_progress:
+                            try:
+                                on_progress(len(buf), 0)
+                            except workflow.Cancelled:
+                                raise
+                            except Exception:
+                                pass
+            finally:
+                aclose = getattr(gen, 'aclose', None)
+                if aclose is not None:
+                    try:
+                        await aclose()
+                    except Exception:
+                        pass
             return bytes(buf)
         return asyncio.run(_run())
 
