@@ -9,10 +9,40 @@ import zipfile
 import requests
 
 
+REQUIRED = ('g2pw.onnx', 'POLYPHONIC_CHARS.txt', 'MONOPHONIC_CHARS.txt', 'config.py', 'version',
+            'bopomofo_to_pinyin_wo_tune_dict.json', 'bert-base-chinese_s2t_dict.txt',
+            'char_bopomofo_dict.json', 'LICENSE-G2PW.txt', 'vocab.txt')
+ZIP_MEMBERS = ('g2pw.onnx', 'POLYPHONIC_CHARS.txt', 'MONOPHONIC_CHARS.txt', 'config.py', 'version')
+
+
+def validate_assets(target):
+    """校验已落盘资产：缺失/空文件、异常模型、坏 JSON、坏词表一律明确报错。"""
+    target = Path(target)
+    missing = [n for n in REQUIRED
+               if not (target / n).is_file() or (target / n).stat().st_size == 0]
+    if missing:
+        raise RuntimeError('G2PW 资产缺失: ' + ', '.join(missing))
+    if (target / 'g2pw.onnx').stat().st_size <= 10 * 1024**2:
+        raise RuntimeError('模型文件异常过小，疑似错误页，请删除 g2pw.onnx 后重跑')
+    for name in ('bopomofo_to_pinyin_wo_tune_dict.json', 'char_bopomofo_dict.json'):
+        try:
+            json.loads((target / name).read_text(encoding='utf-8'))
+        except ValueError as e:
+            raise RuntimeError(f'G2PW 资产不是合法 JSON（{name}），请删除后重跑') from e
+    if '[PAD]' not in (target / 'vocab.txt').read_text(encoding='utf-8').splitlines()[0]:
+        raise RuntimeError('词表异常（首行无 [PAD]），请删除 vocab.txt 后重跑')
+
+
 def prepare():
     target = Path(__file__).parent / 'models' / 'g2pw'
     target.mkdir(parents=True, exist_ok=True)
-    sources = {}
+    try:
+        previous = json.loads((target / 'manifest.json').read_text(encoding='utf-8'))
+        sources = {name: info['source'] for name, info in
+                   previous.get('manifest', previous).items()
+                   if isinstance(info, dict) and info.get('source')}
+    except (OSError, ValueError):
+        sources = {}
 
     def download(url, path):
         # 先写 .part 再原子替换：中断只留临时文件，正式文件永远是完整下载
@@ -25,8 +55,7 @@ def prepare():
         part.replace(path)
         sources[path.name] = url
 
-    zip_members = ('g2pw.onnx', 'POLYPHONIC_CHARS.txt', 'MONOPHONIC_CHARS.txt', 'config.py', 'version')
-    if not all((target / n).is_file() and (target / n).stat().st_size > 0 for n in zip_members):
+    if not all((target / n).is_file() and (target / n).stat().st_size > 0 for n in ZIP_MEMBERS):
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / 'model.zip'
             download('https://storage.googleapis.com/esun-ai/g2pW/G2PWModel-v2-onnx.zip', archive)
@@ -49,22 +78,7 @@ def prepare():
     vocab = target / 'vocab.txt'
     if not vocab.is_file() or vocab.stat().st_size == 0:
         download('https://huggingface.co/google-bert/bert-base-chinese/resolve/main/vocab.txt', vocab)
-    required = ('g2pw.onnx', 'POLYPHONIC_CHARS.txt', 'MONOPHONIC_CHARS.txt', 'config.py', 'version',
-                'bopomofo_to_pinyin_wo_tune_dict.json', 'bert-base-chinese_s2t_dict.txt',
-                'char_bopomofo_dict.json', 'LICENSE-G2PW.txt', 'vocab.txt')
-    missing = [n for n in required
-               if not (target / n).is_file() or (target / n).stat().st_size == 0]
-    if missing:
-        raise RuntimeError('G2PW 资产缺失: ' + ', '.join(missing))
-    if (target / 'g2pw.onnx').stat().st_size <= 10 * 1024**2:
-        raise RuntimeError('模型文件异常过小，疑似错误页，请删除 g2pw.onnx 后重跑')
-    for name in ('bopomofo_to_pinyin_wo_tune_dict.json', 'char_bopomofo_dict.json'):
-        try:
-            json.loads((target / name).read_text(encoding='utf-8'))
-        except ValueError as e:
-            raise RuntimeError(f'G2PW 资产不是合法 JSON（{name}），请删除后重跑') from e
-    if '[PAD]' not in vocab.read_text(encoding='utf-8').splitlines()[0]:
-        raise RuntimeError('词表异常（首行无 [PAD]），请删除 vocab.txt 后重跑')
+    validate_assets(target)
     manifest = {}
     for path in target.iterdir():
         if path.is_file() and path.name != 'manifest.json' and not path.name.endswith('.part'):

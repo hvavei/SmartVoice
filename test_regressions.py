@@ -1648,6 +1648,95 @@ class TaskManagerTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class PrepareTests(unittest.TestCase):
+    @staticmethod
+    def _write_fake_assets(target, corrupt=None):
+        target.mkdir(parents=True, exist_ok=True)
+        (target / 'g2pw.onnx').write_bytes(b'\0' * (11 * 1024**2))
+        for name in ('POLYPHONIC_CHARS.txt', 'MONOPHONIC_CHARS.txt', 'config.py', 'version',
+                     'bert-base-chinese_s2t_dict.txt', 'LICENSE-G2PW.txt'):
+            (target / name).write_text('placeholder\n', encoding='utf-8')
+        (target / 'bopomofo_to_pinyin_wo_tune_dict.json').write_text('{}', encoding='utf-8')
+        (target / 'char_bopomofo_dict.json').write_text('{}', encoding='utf-8')
+        (target / 'vocab.txt').write_text('[PAD]\n[UNK]\n', encoding='utf-8')
+        if corrupt == 'missing-json':
+            (target / 'char_bopomofo_dict.json').unlink()
+        elif corrupt == 'bad-json':
+            (target / 'char_bopomofo_dict.json').write_text('{oops', encoding='utf-8')
+        elif corrupt == 'bad-vocab':
+            (target / 'vocab.txt').write_text('hello\n', encoding='utf-8')
+        elif corrupt == 'tiny-onnx':
+            (target / 'g2pw.onnx').write_bytes(b'<html>error</html>')
+
+    def test_validate_assets_accepts_complete_set(self):
+        import prepare_models
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'models'
+            self._write_fake_assets(target)
+            self.assertIsNone(prepare_models.validate_assets(target))
+
+    def test_validate_assets_rejects_each_failure(self):
+        import prepare_models
+        cases = [('missing-json', '缺失'), ('bad-json', '合法 JSON'),
+                 ('bad-vocab', '[PAD]'), ('tiny-onnx', '异常过小')]
+        for corrupt, needle in cases:
+            with self.subTest(corrupt=corrupt):
+                with tempfile.TemporaryDirectory() as tmp:
+                    target = Path(tmp) / 'models'
+                    self._write_fake_assets(target, corrupt=corrupt)
+                    with self.assertRaisesRegex(RuntimeError, needle):
+                        prepare_models.validate_assets(target)
+
+    def test_prepare_skips_downloads_when_assets_valid(self):
+        import prepare_models
+        import requests
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'models' / 'g2pw'
+            self._write_fake_assets(target)
+
+            def no_network(*args, **kwargs):
+                raise AssertionError('must not download')
+
+            fake_module = str(Path(tmp) / 'prepare_models.py')
+            with patch.object(prepare_models, '__file__', fake_module), \
+                    patch.object(requests, 'get', side_effect=no_network):
+                prepare_models.prepare()
+            manifest = json.loads((target / 'manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(set(manifest), set(prepare_models.REQUIRED))
+
+    def test_branding_failure_keeps_previous_outputs(self):
+        import os as _os
+        import prepare_branding
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            src_old, src_new = tmp / 'old.png', tmp / 'new.png'
+            Image.new('RGB', (64, 48), 'navy').save(src_old)
+            Image.new('RGB', (64, 48), 'maroon').save(src_new)
+            dest = tmp / 'assets'
+            prepare_branding.prepare(src_old, dest)
+            before = {p.name: p.read_bytes() for p in dest.iterdir()}
+            self.assertEqual(set(before), {'smartvoice.png', 'smartvoice.ico',
+                                           'wizard-image.bmp', 'wizard-small.bmp'})
+            real_replace = _os.replace
+            calls = []
+
+            def flaky_replace(src, dst):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise OSError('killed mid-build')
+                return real_replace(src, dst)
+
+            with patch('os.replace', side_effect=flaky_replace):
+                with self.assertRaises(OSError):
+                    prepare_branding.prepare(src_new, dest)
+            self.assertEqual({p.name: p.read_bytes() for p in dest.iterdir()}, before)
+            prepare_branding.prepare(src_new, dest)
+            for img in ('smartvoice.png', 'wizard-image.bmp', 'wizard-small.bmp'):
+                with Image.open(dest / img) as picture:
+                    picture.load()
+
+
 class SynthJobsTests(unittest.TestCase):
     def _ctx(self, synth, pool=None, current=True, cache=None):
         import voice_tasks as workflow
