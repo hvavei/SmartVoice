@@ -30,6 +30,8 @@ WINDOW = 32  # 与随包 G2PW config.py 的训练上下文窗口一致
 _init_lock = threading.Lock()
 _ready = False
 _window_cache = OrderedDict()
+_tokenize_cache = OrderedDict()
+_MAX_TOKENIZE_CACHED = 512
 _window_lock = threading.Lock()
 
 _tok = None
@@ -161,6 +163,22 @@ def _tokenize_and_map(text):
     return tokens, text2token, token2text
 
 
+def _tokenize_cached(window):
+    """同窗口不同查询位共享分词结果；输入输出只读，可安全共享。"""
+    with _window_lock:
+        hit = _tokenize_cache.get(window)
+        if hit is not None:
+            _tokenize_cache.move_to_end(window)
+            return hit
+    result = _tokenize_and_map(window)
+    with _window_lock:
+        _tokenize_cache[window] = result
+        _tokenize_cache.move_to_end(window)
+        while len(_tokenize_cache) > _MAX_TOKENIZE_CACHED:
+            _tokenize_cache.popitem(last=False)
+    return result
+
+
 def _truncate(text, tokens, text2token, token2text, query_id, max_len=512):
     trunc = max_len - 2
     if len(tokens) <= trunc:
@@ -249,7 +267,7 @@ def _disambiguate(text):
 
     for key in pending:
         window, query_id = key
-        tokens, text2token, token2text = _tokenize_and_map(window)
+        tokens, text2token, token2text = _tokenize_cached(window)
         stext, sqid, stokens, stext2token = _truncate(
             window, tokens, text2token, token2text, query_id)
         proc = ["[CLS]"] + stokens + ["[SEP]"]

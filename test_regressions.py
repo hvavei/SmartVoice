@@ -474,6 +474,25 @@ class PolyphoneTests(unittest.TestCase):
             self.assertEqual(load.call_count, 2)
 
     @requires_models
+    def test_overlapping_windows_share_tokenization(self):
+        import polyphone as p
+        p._lazy_init()
+        p._tokenize_cache.clear()
+        window = '银行重新办理业务'
+        with patch.object(p, '_tokenize_and_map', wraps=p._tokenize_and_map) as tok:
+            first = p._tokenize_cached(window)
+            second = p._tokenize_cached(window)
+            self.assertEqual(tok.call_count, 1)
+            self.assertIs(first, second)
+        p._tokenize_cache.clear()
+        first = p.annotate_sapi('银行重新办理银行业务。')[1]
+        self.assertGreater(len(p._tokenize_cache), 0)
+        self.assertIn(1, first)
+        p._tokenize_cache.clear()
+        p._window_cache.clear()
+        self.assertEqual(p.annotate_sapi('银行重新办理银行业务。')[1], first)
+
+    @requires_models
     def test_model_real_inference_and_unicode_offsets(self):
         import polyphone
         text, phones = polyphone.annotate_sapi('银行')
