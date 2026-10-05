@@ -117,6 +117,13 @@
 - prepare：校验抽 validate_assets 可测，幂等跳过保留 manifest 源，branding 原子写（上轮已入库，本轮补单测）；4 项 0.47 秒全过。
 - 回归：全套 166 项 OK（+31），冒烟 13 PASS。
 
+## ⑲ 收尾四项：播放导出解耦/分词缓存/长路径/退出防卡死（2026-10-05）
+- 播放与导出：`MciPlayer` 与时钟格式化搬入 `playback.py`，导出严格/宽容校验搬入 `export_options.py`，App 只留薄委托与旧方法名；3 项单测毫秒级全过。
+- 分词缓存：重叠窗口分词结果加锁共享（与推理缓存同锁，无锁序风险）；真模型验证缓存不污染读音。
+- 长路径：bootloader 自带 longPathAware（实测确认，无需改 spec）；`storage.long_path` 漏斗覆盖原子读写与导出（返回短形态保 explorer 可用），项目/导入/OCR 入口接线；280+ 路径实测往返。
+- 退出防卡死：`DaemonPool`（工作线程 daemon，退出不钉解释器）+ 关闭落盘最多等 10 秒 + `on_close` 可重入；GUI 转发改有界服务；阻塞任务下关闭秒回有单测为证。
+- 回归：全套 174 项 OK（+8），冒烟 13 PASS。
+
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。
 - 独立音色能力策略：VoiceType 只展示类别，StyleList/RolePlayList 控制可选值，SSML prosody/phoneme 按模型族策略判断。未知能力保守禁用非默认参数；多人任务逐音色校验，错误包含角色名，不静默降级/换声。
