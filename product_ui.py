@@ -12,6 +12,7 @@ import appmeta
 import engine
 import storage
 import voice_tasks as workflow
+from export_options import coerce_export_options, validate_export_options
 from ui.dialogs import open_component_manager, open_export_settings
 from ui.menus import build_product_menu
 from theme import ACCENT, BG, BORDER, FG, PANEL, ROLE, SEL, WARN
@@ -361,14 +362,9 @@ class ProductUI:
         self._project_baseline = self._project_payload()
 
     def _export_options(self):
-        options = {'directory': self.export_dir.get(), 'name': self.export_name.get(),
-                   'format': self.export_format.get().lower(), 'leading_ms': int(self.leading_ms.get()),
-                   'trailing_ms': int(self.trailing_ms.get()), 'normalize': bool(self.normalize_var.get())}
-        if options['format'] not in ('mp3', 'wav') or not options['directory']:
-            raise ValueError('请设置有效输出目录和 MP3/WAV 格式')
-        if not all(0 <= options[k] <= 5000 for k in ('leading_ms', 'trailing_ms')):
-            raise ValueError('首尾留白范围为0～5000毫秒')
-        return options
+        return validate_export_options(self.export_dir.get(), self.export_name.get(),
+                                       self.export_format.get(), self.leading_ms.get(),
+                                       self.trailing_ms.get(), self.normalize_var.get())
 
     def _export_options_safe(self):
         """永不抛异常的导出参数快照：坏值钳位/回退，供保存配置与项目比对使用。"""
@@ -391,20 +387,16 @@ class ProductUI:
             norm = cfg_bool(self.normalize_var.get())
         except tk.TclError:
             norm = False
-        return {'directory': sget(self.export_dir, ''), 'name': sget(self.export_name, '配音'),
-                'format': fmt if fmt in ('mp3', 'wav') else 'mp3',
-                'leading_ms': iget(self.leading_ms, 350), 'trailing_ms': iget(self.trailing_ms, 450),
-                'normalize': norm}
+        return coerce_export_options({'directory': sget(self.export_dir, ''),
+                                      'name': sget(self.export_name, '配音'), 'format': fmt,
+                                      'leading_ms': iget(self.leading_ms, 350),
+                                      'trailing_ms': iget(self.trailing_ms, 450),
+                                      'normalize': norm})
 
     def _apply_export_options(self, options):
         if not isinstance(options, dict):
             return
-        fmt = str(options.get('format', 'mp3')).lower()
-        values = {'directory': str(options.get('directory', '')), 'name': str(options.get('name', '配音')),
-                  'format': fmt if fmt in ('mp3', 'wav') else 'mp3',
-                  'leading_ms': cfg_int(options.get('leading_ms', 350), 350, 0, 5000),
-                  'trailing_ms': cfg_int(options.get('trailing_ms', 450), 450, 0, 5000),
-                  'normalize': cfg_bool(options.get('normalize', False))}
+        values = coerce_export_options(options)
         for k, var in (('directory', self.export_dir), ('name', self.export_name),
                        ('format', self.export_format), ('leading_ms', self.leading_ms),
                        ('trailing_ms', self.trailing_ms), ('normalize', self.normalize_var)):

@@ -1648,6 +1648,41 @@ class TaskManagerTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class ExportPlaybackTests(unittest.TestCase):
+    def test_format_clock(self):
+        from playback import format_clock
+        self.assertEqual(format_clock(0), "00:00")
+        self.assertEqual(format_clock(59999), "00:59")
+        self.assertEqual(format_clock(61000), "01:01")
+        self.assertEqual(format_clock(-5), "00:00")
+        self.assertEqual(format_clock(3599999), "59:59")
+
+    def test_validate_export_options(self):
+        from export_options import validate_export_options
+        good = validate_export_options("D:/out", "配音", "MP3", 350, 450, False)
+        self.assertEqual(good, {"directory": "D:/out", "name": "配音", "format": "mp3",
+                                "leading_ms": 350, "trailing_ms": 450, "normalize": False})
+        for bad in ({"fmt": "ogg"}, {"directory": ""}, {"leading_ms": 99999},
+                    {"trailing_ms": -1}, {"leading_ms": "abc"}):
+            args = dict(directory="D:/out", name="x", fmt="mp3",
+                        leading_ms=350, trailing_ms=450, normalize=False)
+            args.update(bad)
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    validate_export_options(**args)
+
+    def test_coerce_export_options_never_raises(self):
+        from export_options import coerce_export_options
+        out = coerce_export_options({"leading_ms": 99999, "format": "ogg"})
+        self.assertEqual((out["leading_ms"], out["format"], out["name"]), (5000, "mp3", "配音"))
+        out = coerce_export_options({"directory": None, "name": None, "format": None,
+                                     "leading_ms": None, "trailing_ms": "abc", "normalize": "yes"})
+        self.assertEqual(out, {"directory": "", "name": "配音", "format": "mp3",
+                               "leading_ms": 350, "trailing_ms": 450, "normalize": True})
+        out = coerce_export_options("not-a-dict")
+        self.assertEqual(out["format"], "mp3")
+
+
 class PrepareTests(unittest.TestCase):
     @staticmethod
     def _write_fake_assets(target, corrupt=None):
