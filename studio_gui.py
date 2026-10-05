@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 import tempfile
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import wait
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -21,7 +21,7 @@ import storage
 import theme
 from config_store import ConfigStore
 from playback import MciPlayer, format_clock
-from task_manager import TaskManager
+from task_manager import DaemonPool, TaskManager
 from ui.serverbar import build_serverbar
 from ui.toolbar import build_toolbar
 from ui.configbar import build_configbar, ZOOMS
@@ -69,7 +69,7 @@ class App(ProductUI):
         self._playing_pcm = None
         self._audition_cache = OrderedDict()
         self._audition_cache_lock = threading.Lock()
-        self._synth_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts")
+        self._synth_pool = DaemonPool(max_workers=2, thread_name_prefix="tts")
         self._config_store = ConfigStore(
             save_fn=lambda cfg: engine.save_json(engine.CONFIG_FILE, cfg),
             schedule_fn=lambda ms, cb: self.root.after(ms, cb),
@@ -142,6 +142,11 @@ class App(ProductUI):
         root.bind("<Configure>", self._on_root_resize)
 
     def on_close(self):
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
         if self._active_task and not messagebox.askokcancel('任务尚未完成', '退出会取消当前任务；已完成片段会保留，下次可复用。是否退出？'):
             return
         if not self._confirm_discard():
@@ -149,8 +154,11 @@ class App(ProductUI):
         self._preempt()
         self._prog_cancel()
         self._save_cfg()      # 捕获退出前的最后修改（如刚输入的Key/端口）
-        self._flush_cfg()
-        self._config_store.shutdown()
+        pending = self._flush_cfg()
+        if pending is not None:
+            wait([pending], timeout=10)  # 落盘最多等10秒；超时则后台线程继续写，不钉死退出
+        # wait=False：池线程均为 daemon，收尾工作（诊断落盘等）允许 orphan，不阻塞 destroy。
+        self._config_store.shutdown(wait=False)
         self._synth_pool.shutdown(wait=False, cancel_futures=True)
         for timer in self.root.tk.splitlist(self.root.tk.call("after", "info")):
             self.root.after_cancel(timer)
@@ -949,10 +957,11 @@ class App(ProductUI):
 
     def _flush_cfg(self):
         if self._config_store.pending is None:
-            return
+            return None
         self._bg_n += 1
-        self._config_store.flush()
+        future = self._config_store.flush()
         self._bg_kick()
+        return future
 
     def _dub_cfg_snapshot(self):
         # 配音面板持久化快照(面板未建时回退内存值)
@@ -2092,12 +2101,12 @@ class App(ProductUI):
         def voices_fn():
             return [{"name": k, "id": v} for k, v in voices.items()]
 
-        from http.server import ThreadingHTTPServer
         forward_server._Handler.synth_fn = staticmethod(synth_fn)
         forward_server._Handler.voices_fn = staticmethod(voices_fn)
         try:
             # 仅绑定回环地址：无鉴权的合成接口不应暴露给局域网，浏览器插件等本机调用不受影响。
-            self.server = ThreadingHTTPServer(("127.0.0.1", port), forward_server._Handler)
+            self.server = forward_server.BoundedThreadingHTTPServer(("127.0.0.1", port),
+                                                                    forward_server._Handler)
         except Exception as e:
             return self._fail(f"端口{port}启动失败: {e}")
         threading.Thread(target=self.server.serve_forever, daemon=True).start()

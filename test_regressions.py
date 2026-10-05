@@ -583,6 +583,33 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(kick_threads)
         self.assertTrue(all(t is main_thread for t in kick_threads))
 
+    def test_pools_use_daemon_threads(self):
+        import threading
+        import time
+        a = self.app
+        release = threading.Event()
+        a._synth_pool.submit(release.wait, 30)
+        a._config_store.pool.submit(release.wait, 30)
+        deadline = time.monotonic() + 5
+        while sum(1 for t in threading.enumerate()
+                  if t.name.startswith(("tts_", "config_"))) < 2 and time.monotonic() < deadline:
+            time.sleep(.02)
+        workers = [t for t in threading.enumerate() if t.name.startswith(("tts_", "config_"))]
+        self.assertEqual(len(workers), 2)
+        self.assertTrue(all(t.daemon for t in workers))
+        release.set()
+
+    def test_close_returns_promptly_with_blocked_tasks(self):
+        import threading
+        import time
+        a = self.app
+        release = threading.Event()
+        a._synth_pool.submit(release.wait, 30)
+        t0 = time.monotonic()
+        a.on_close()
+        self.assertLess(time.monotonic() - t0, 15)
+        release.set()
+
     def test_remembered_key_reaches_persist_payload(self):
         a = self.app
         a.remember_var.set(True)

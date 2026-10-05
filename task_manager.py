@@ -10,10 +10,40 @@ import queue
 import threading
 import time
 import tkinter as tk
+import weakref
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import thread as _executor_thread
 
 POLL_INTERVAL_MS = 50
 POLL_BATCH = 100
 POLL_BUDGET_S = 0.008
+
+
+class DaemonPool(ThreadPoolExecutor):
+    """与 ThreadPoolExecutor 同语义，工作线程为 daemon：退出时不钉死解释器。
+
+    在途任务靠调用方取消令牌与网络超时收敛；磁盘/缓存写用原子替换，半路 abandonned 不 corrupt。
+    实现钉死 CPython 3.14 的 _adjust_thread_count（仅加 daemon=True），本仓库只验证 3.14。
+    """
+
+    def _adjust_thread_count(self):
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def weakref_cb(_, q=self._work_queue):
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads < self._max_workers:
+            thread_name = '%s_%d' % (self._thread_name_prefix or self, num_threads)
+            t = threading.Thread(name=thread_name, daemon=True,
+                                 target=_executor_thread._worker,
+                                 args=(weakref.ref(self, weakref_cb),
+                                       self._create_worker_context(),
+                                       self._work_queue))
+            t.start()
+            self._threads.add(t)
+            _executor_thread._threads_queues[t] = self._work_queue
 
 
 class TaskManager:
