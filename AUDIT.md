@@ -102,14 +102,20 @@
 - 入口/构建：CLI 模式互斥+端口校验移入 server 分支+`install-component` 异常转 SystemExit；`installation_check` 覆盖主题调色板与界面模块导入、报告写盘建目录、错误信息脱敏路径；diagnose ffmpeg 进脱敏 try；构建清 work/dist 防旧文件混入；dist 预览 exe/README 原子替换；verify 校验参数存在+卸载查 `_internal`；requirements 钉死组件原生依赖。
 - 回归：全套 150 项 OK（+15），冒烟 13 PASS； Polyphone `_b2p` None 系真实资产合法回退，严格校验误报已回退（测试套件捕获）。
 
-## ⑯ 一期拆分：config_store.py（2026-10-04）
-- 内容：配置去抖暂存/后台落盘/单线程池从 App 搬入新模块，Tk 的 after/落盘/回报道由调用方以回调注入，零循环导入；App 只留组装（读控件拼 dict）与同名方法，`_cfg_pool/_cfg_pending/_cfg_after` 改属性代理，测试零改动。
+## ⑯ 一期拆分：config_store.py（2026-10-04）- 内容：配置去抖暂存/后台落盘/单线程池从 App 搬入新模块，Tk 的 after/落盘/回报道由调用方以回调注入，零循环导入；App 只留组装（读控件拼 dict）与同名方法，`_cfg_pool/_cfg_pending/_cfg_after` 改属性代理，测试零改动。
 - 教训：首版去抖到点直调 `store.flush()`，绕过了 `_flush_cfg` 的 `_bg_n` 递增与 `_bg_kick()`，轮询提前退出致合成完成事件积压（`_active_task` 永真）；另首版回报道在工作线程调 `_bg_kick` 会卡死 `_bg_polling`（`root.after` 禁止跨线程）。两处均被测试套件捕获，现到点回调走 `App._flush_cfg`、回报道只入队，时序与旧代码一致。
 - 回归：全套 150 项 OK（含新增主线程 kick 断言），冒烟 13 PASS。
 
 ## ⑰ 三期拆分：task_manager.py（2026-10-04）
 - 内容：后台泵 mechanics（队列/在途计数/轮询定时/序号/提交/取消）从 App 搬入新模块，路由 handler 与渲染回调由 App 注入；`_bg/_bg_run/_bg_poll/_bg_kick/_preempt` 改薄委托，`_bgq/_bg_n/_bg_polling/_seq` 改属性代理，测试零改动；顺手删 studio_gui 闲置的 `import queue`。
 - 回归：全套 152 项 OK（含 TaskManager 提交/取消/路由/续跑单测），冒烟 13 PASS。
+
+## ⑱ 硬骨头攻坚：synth_jobs/增量高亮/有界转发/prepare 单测（2026-10-05）
+- synth_jobs.py：并发收割核心（串行/双路/取消/缓存/回调）搬入无 Tk 模块，App 按次组装 JobContext；直调单测 5 项（0.08 秒），既有 App 级测试零改动全过。
+- 增量高亮：损伤区 diff + 标注比对双保险，旁白行打字零 Tcl，统计从合并标注派生零正则；3000 行文档单次刷新 22ms→3.7ms。
+- 转发有界池：8 工人 + 16 排队，超限 503；拒绝前排空请求防 Windows RST 吞码（像素级取证确认后修复，6 连过）；Edge 按块 120 秒超时进现有重试链。
+- prepare：校验抽 validate_assets 可测，幂等跳过保留 manifest 源，branding 原子写（上轮已入库，本轮补单测）；4 项 0.47 秒全过。
+- 回归：全套 166 项 OK（+31），冒烟 13 PASS。
 
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。
