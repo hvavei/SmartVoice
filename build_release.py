@@ -197,6 +197,10 @@ def main():
         # dist 也要清：PyInstaller --noconfirm 不删旧输出，已删除的旧文件会混入新安装包。
         shutil.rmtree(work / 'build', ignore_errors=True)
         shutil.rmtree(work / 'dist', ignore_errors=True)
+        # 确定性构建：子进程继承，哈希种子与归档时间戳固定，同源码两次构建载荷一致。
+        # 范围是未签名载荷——带 RFC3161 时间戳的签名本身恒为变量，不纳入确定性承诺。
+        os.environ.setdefault('PYTHONHASHSEED', '0')
+        os.environ.setdefault('SOURCE_DATE_EPOCH', os.environ.get('SOURCE_DATE_EPOCH') or '315532800')
         subprocess.run([sys.executable, '-B', '-m', 'PyInstaller', '--noconfirm',
                         '--workpath', str(work / 'build'), '--distpath', str(work / 'dist'),
                         str(ROOT / 'SmartVoice.spec')], cwd=ROOT, check=True)

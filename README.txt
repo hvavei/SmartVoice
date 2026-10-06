@@ -9,6 +9,8 @@ SmartVoice 3.1.0
 开发目录入口：dist\SmartVoice.exe，必须保留 _internal 依赖目录。
 数字签名状态见 release\signature-status.txt；无正式证书时可 --self-signed 本机自签。
 卸载：开始菜单 → SmartVoice → 卸载 SmartVoice，或安装目录中的 unins000.exe。
+标准版/完整版可直接互相覆盖安装（安装程序自动清理旧组件目录）；降级安装会被拒绝，
+如需装旧版请先卸载（卸载保留用户数据）。
 如果电脑上是旧版 AzureTTSStudio 免安装副本，请运行 Remove-Legacy-SmartVoice.bat；它只移除旧程序，不删除用户数据。
 
 用户数据位于 %LOCALAPPDATA%\SmartVoice，可从“关于 → 打开用户数据目录”进入：
@@ -26,7 +28,7 @@ exports：默认成品输出位置；可在导出设置中更改。
 “选项 → 保存/打开”保留原稿、角色、人声、参数、已完成片段和导出记录。
 项目不含账户凭证。换电脑需重新填写该电脑的凭证。Key 默认仅本次有效；勾选「记住Key」才会加密保存。
 主编辑区支持 Ctrl+Z/Ctrl+Y；文本右键菜单含剪切/复制/粘贴/试听，
-“三击”打开独立大窗口编辑（共享原稿和撤销栈），其编辑操作也全部集成到右键菜单。
+“双击”打开独立大窗口编辑（共享原稿和撤销栈），其编辑操作也全部集成到右键菜单。
 人声表方向键选中 + 回车即可试听；Ctrl+S 全局保存项目（含子窗口内）。
 导入支持 TXT/Markdown/PDF/DOCX/SRT/VTT/ASS/SSA/LRC/JSON/CSV；VTT/ASS 只取台词，
 修订删除线文字与字幕定位符不朗读。

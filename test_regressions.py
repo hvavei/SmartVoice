@@ -2702,6 +2702,18 @@ class SweepRegressionTests(unittest.TestCase):
             _save_ico(out, base)
             self.assertTrue(out.is_file() and out.stat().st_size > 0)
 
+    def test_installer_has_downgrade_gate_and_edition_cleanup(self):
+        from pathlib import Path as _Path
+        iss = (_Path(__file__).parent / 'installer.iss').read_text(encoding='utf-8')
+        self.assertIn('AppMutex=SmartVoiceServerMutex', iss)
+        self.assertIn('function InitializeSetup(): Boolean;', iss)
+        self.assertIn('function CompareVersion(', iss)
+        for entry in ('numpy', 'numpy.libs', 'onnxruntime', 'tokenizers', 'cv2',
+                      'rapidocr_onnxruntime', 'shapely', 'shapely.libs', 'pyclipper',
+                      'yaml', r'models\g2pw'):
+            self.assertIn('"{app}\\_internal\\' + entry if not entry.startswith('models')
+                          else '"{app}\\' + entry, iss)
+
     def test_config_store_cancel_and_baseexception(self):
         from tkinter import TclError
         from config_store import ConfigStore

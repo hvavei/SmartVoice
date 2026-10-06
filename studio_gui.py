@@ -444,9 +444,9 @@ class App(ProductUI):
         if self.tree.identify_region(event.x, event.y) == 'separator':
             return 'break'
 
-    def _open_editor_by_gesture(self, event=None):
-        # 三击开大窗：双击保留给 Text 类默认选词，不再劫持。
+    def _open_editor_double_click(self, event=None):
         self.open_editor()
+        return 'break'  # 阻止 Text 类默认双击选词和继续分发：双击开大窗是原设计，不改。
 
 
     # ---- 开关色块 ----
@@ -476,10 +476,10 @@ class App(ProductUI):
 
     def _setup_placeholder(self):
         """提示是覆盖标签，不写进原稿和撤销栈。"""
-        self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 三击打开大窗口编辑',
+        self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 双击打开大窗口编辑',
                                              bg=PANEL, fg=MUTED, font=self._font())
         self._placeholder_label.bind('<Button-1>', lambda e: (self._placeholder_label.place_forget(), self.text.focus_set()))
-        self._placeholder_label.bind('<Triple-Button-1>', self._open_editor_by_gesture)
+        self._placeholder_label.bind('<Double-Button-1>', self._open_editor_double_click)
         self.text.bind('<FocusIn>', lambda e: self._placeholder_label.place_forget())
         self.text.bind('<FocusOut>', lambda e: self._schedule_editor_info())
         if self.text_content:
