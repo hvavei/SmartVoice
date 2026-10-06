@@ -111,4 +111,4 @@ begin
     end;
 end;
 
-; Only packaged program files are tracked for uninstall. User config/output/cache are not deleted.
+// Only packaged program files are tracked for uninstall. User config/output/cache are not deleted.
