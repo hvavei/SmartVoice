@@ -87,8 +87,10 @@ def package(full, work, release):
         archive_path = release / filename
         unpacked = 0
         # 确定性打包：固定 ZipInfo 时间戳/权限/排序，同源码两次构建 sha256 一致；
-        # 未设 SOURCE_DATE_EPOCH 时用 0（1980-01-01），只影响包内元数据。
-        stamp = time.gmtime(int(os.environ.get('SOURCE_DATE_EPOCH', '0') or 0))[:6]
+        # ZIP 时间戳下限 1980-01-01，未设 SOURCE_DATE_EPOCH 时取该下限，只影响包内元数据。
+        _ZIP_EPOCH_MIN = 315532800  # 1980-01-01 00:00 UTC
+        stamp = time.gmtime(max(int(os.environ.get('SOURCE_DATE_EPOCH', '0') or 0),
+                                _ZIP_EPOCH_MIN))[:6]
         with zipfile.ZipFile(archive_path, 'w') as z:
             names = sorted(p.relative_to(payload).as_posix()
                            for p in payload.rglob('*') if p.is_file())

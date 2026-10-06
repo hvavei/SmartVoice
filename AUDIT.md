@@ -148,6 +148,7 @@
 - 引擎/任务：Session 记 BaseException 诊断再抛；forward _json 序列化入 try（502 不断连）、错误只报类型名（--cors 下不泄内网地址）、GET 长度/请求头上限、chunked 明确 501、reject 总时限 3s、池换 DaemonPool（退出不钉死）；_bg_run 接 BaseException 转 fail（不断 busy 卡死）；收割真失败记诊断；ConfigStore 取消 TclError 守卫、中断记名再抛；SegmentCache 命中刷新 mtime（FIFO 改 LRU）；load_json 缺文件静默、权限/编码留 .bak；trust_env=False；正文则预编译；MciPlayer stopped 态不发 pause（单播放器，别名隔离为误报不改）；TaskManager 轮询吞错/poll 无界线程/慢 body 分片/转发取消透传经核验为设计权衡或收益不足，不改。
 - 文档/组件：SRT 去 {\an8}、短时间戳；LRC 文中标签隔空格；VTT（去头/注释/<v>）与 ASS/SSA（Dialogue 取词）正式支持；DOCX 跳修订删除；无 BOM 中文 UTF-16 启发（≥64B + CJK>50%，短二进制不再误判）；PDF 坏包/加密转 ValueError；OCR 单页失败只丢该页、create 异常放宽；组件下载网络错转用户文案；ABI 跨版本残留启动期 gc_stale_components 回收；prepare manifest 只收 REQUIRED、part.replace 纳入清理、branding 保 alpha。升级单例/D10 经核验为“重启生效”设计不改；IndexError 为 TOCTOU 守卫保留。
 - 入口/构建：--install-component 先验文件+路径脱敏；smoke 断言转干净退出；--server Ctrl+C 回 0、启动打印快照提示、建 Server 互斥（AppMutex 同名，运行中安装先提示）；diagnose 输出 OSError 脱敏、refresh 只留 endpoint 主机名；组件包确定性打包（固定 ZipInfo/排序，SOURCE_DATE_EPOCH）；spec datas 排序；验收加注册表残留断言。PE 级确定性/跨 Edition 覆盖/降级门控列为已知缺口（签名保证完整性，文档化，不硬凑）。
+- 打包实测：epoch 0（1970）被 ZIP 拒收（不支持 1980 前时间戳），已钳位 1980-01-01 下限；双包构建签名一次通过。
 - 回归：全套 228 项 OK（+17），冒烟 13 PASS；修出 2 个真回归（ctypes last-error 脏值误报运行中、启发式短样本误判）与 3 处旧契约更新（暂停语义/502 形状/OCR 单页）。
 
 ## 本次交付范围
