@@ -22,6 +22,8 @@ SUBTITLE_FILL = (60, 110, 165)
 
 def _load_square(source):
     with Image.open(source) as original:
+        if min(original.size) < 256:
+            raise ValueError('源图过小（短边不足256px），请提供≥512px的正方形图，否则图标模糊')
         image = ImageOps.exif_transpose(original).convert('RGB')
     side = min(image.size)
     if side != image.size[0] or side != image.size[1]:

@@ -132,6 +132,11 @@
 - 入口/构建：CLI 端口读已保存配置；签名状态双版累积；verify 递归查缓存/URL 语义取包名；diagnose 无 Key 速败；diagnose_azure 拆出 main() 可测；ffmpeg 报错脱敏路径；魔法数命名；试听缓存键哈希 Key/端点。
 - 回归：全套 194 项 OK（+20），冒烟 13 PASS；新增测试自身 3 处笔误（换行吞并、textindex 比较、asyncgen 状态字符串）均当场修正。
 
+## ㉑ 通筛补漏与边界收敛（2026-10-06）
+- 文档：DOCX 按正文大小限流（配图不再误杀）；SRT 只认时间戳行（`A --> B` 台词保留）；LRC 行内多标签先隔后删、词级标签空格代替；diagnose_azure 主入口可测化未改行为。
+- 组件/构建：prepare 下载限流 + 失败清 .part；manifest 原子写；branding 小图拒收（<256px）；CLI --cors/--port 脱离 --server 即报错；diagnose 模式互斥 + --live 需 Key；安装包签名双版累积；验收卸载轮询命名常量、工作目录脱敏；自签错误脱敏 + 魔法数命名；时间戳 https 前置拒绝；组件包 slack 死拷贝删除。
+- 回归：全套 206 项 OK（+12），冒烟 13 PASS。
+
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。
 - 独立音色能力策略：VoiceType 只展示类别，StyleList/RolePlayList 控制可选值，SSML prosody/phoneme 按模型族策略判断。未知能力保守禁用非默认参数；多人任务逐音色校验，错误包含角色名，不静默降级/换声。

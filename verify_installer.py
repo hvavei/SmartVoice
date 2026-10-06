@@ -7,6 +7,10 @@ import tempfile
 import os
 
 
+UNINSTALL_POLLS = 100
+POLL_INTERVAL_S = 0.1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('installer', type=Path)
@@ -75,15 +79,18 @@ def main():
             subprocess.run([str(unins), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'],
                            check=False, timeout=120)
             import time
-            for _ in range(100):
+            for _ in range(UNINSTALL_POLLS):
                 if not (app / 'SmartVoice.exe').exists() and not (app / '_internal').exists():
                     break
-                time.sleep(0.1)
+                time.sleep(POLL_INTERVAL_S)
+            # 超时不抛：后面的断言自然会失败，且不能掩盖 try 块里的真正断言错误。
     assert (user / 'settings.json').read_bytes() == config
     assert (user / 'exports' / 'keep.txt').is_file()
     assert not (app / 'SmartVoice.exe').exists()
     assert not (app / '_internal').exists(), 'uninstall left _internal'
-    print(json.dumps({'ok': True, 'workdir': str(work), 'checks': checks['checks'],
+    import re
+    safe_workdir = re.sub(r'Users\\[^\\]+', r'Users\\<user>', str(work))
+    print(json.dumps({'ok': True, 'workdir': safe_workdir, 'checks': checks['checks'],
                       'upgrade_preserves_data': True, 'uninstall_preserves_data': True}, ensure_ascii=True, indent=2))
 
 

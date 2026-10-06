@@ -211,6 +211,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.live and not args.output:
         parser.error("--live requires --output")
+    if sum([bool(args.voices), bool(args.transcribe), bool(args.refresh_cache)]) > 1:
+        parser.error('--voices/--transcribe/--refresh-cache 只能指定其一')
+    if (args.voice or args.native_only) and not args.live:
+        parser.error('--voice/--native-only 需要与 --live 联用')
     if args.refresh_cache:
         _, key, region, endpoint, _ = configuration(args.config)
         if not key:

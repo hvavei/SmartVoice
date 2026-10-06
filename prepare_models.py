@@ -56,21 +56,36 @@ def prepare():
     except (OSError, ValueError):
         sources = {}
 
-    def download(url, path):
-        # 先写 .part 再原子替换：中断只留临时文件，正式文件永远是完整下载
+    def download(url, path, cap):
+        # 先写 .part 再原子替换：中断只留临时文件，正式文件永远是完整下载；
+        # 限流防投毒/无限流写满磁盘，失败清理 .part。
         part = path.with_name(path.name + '.part')
-        with requests.get(url, stream=True, timeout=(15, 120)) as r:
-            r.raise_for_status()
-            with part.open('wb') as out:
-                for block in r.iter_content(1024 * 1024):
-                    out.write(block)
+        received = 0
+        try:
+            with requests.get(url, stream=True, timeout=(15, 120)) as r:
+                r.raise_for_status()
+                with part.open('wb') as out:
+                    for block in r.iter_content(1024 * 1024):
+                        if not block:
+                            continue
+                        received += len(block)
+                        if received > cap:
+                            raise ValueError('资产超出预期大小，中止下载')
+                        out.write(block)
+        except Exception:
+            try:
+                part.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         part.replace(path)
         sources[path.name] = url
 
     if any(check_asset(target, n) is not None for n in ZIP_MEMBERS):
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / 'model.zip'
-            download('https://storage.googleapis.com/esun-ai/g2pW/G2PWModel-v2-onnx.zip', archive)
+            download('https://storage.googleapis.com/esun-ai/g2pW/G2PWModel-v2-onnx.zip', archive,
+                     800 * 1024**2)
             with zipfile.ZipFile(archive) as z:
                 for name in z.namelist():
                     base = Path(name).name
@@ -91,12 +106,13 @@ def prepare():
                  'char_bopomofo_dict.json'):
         if (target / name).is_file() and (target / name).stat().st_size > 0:
             continue  # 已有非空文件不再重下，保证幂等
-        download(repo + 'g2pw/' + name, target / name)
+        download(repo + 'g2pw/' + name, target / name, 50 * 1024**2)
     if not (target / 'LICENSE-G2PW.txt').is_file() or (target / 'LICENSE-G2PW.txt').stat().st_size == 0:
-        download(repo + 'LICENCE', target / 'LICENSE-G2PW.txt')
+        download(repo + 'LICENCE', target / 'LICENSE-G2PW.txt', 50 * 1024**2)
     vocab = target / 'vocab.txt'
     if not vocab.is_file() or vocab.stat().st_size == 0:
-        download('https://huggingface.co/google-bert/bert-base-chinese/resolve/main/vocab.txt', vocab)
+        download('https://huggingface.co/google-bert/bert-base-chinese/resolve/main/vocab.txt', vocab,
+                 5 * 1024**2)
     validate_assets(target)
     manifest = {}
     for path in target.iterdir():
@@ -105,7 +121,10 @@ def prepare():
                 digest = hashlib.file_digest(f, 'sha256').hexdigest()
             manifest[path.name] = {'sha256': digest, 'bytes': path.stat().st_size,
                                    'source': sources.get(path.name, 'G2PWModel-v2-onnx.zip')}
-    (target / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+    manifest_path = target / 'manifest.json'
+    manifest_tmp = manifest_path.with_name(manifest_path.name + '.part')
+    manifest_tmp.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+    manifest_tmp.replace(manifest_path)
     print('G2PW assets ready:', target)
 
 

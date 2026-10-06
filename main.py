@@ -305,11 +305,15 @@ def main():
     ap.add_argument('--install-component', nargs=2, metavar=('NAME', 'ZIP'))
     ap.add_argument("--server", action="store_true")
     ap.add_argument("--port", type=int, default=None, help="端口号（默认读已保存配置，否则 8774）")
+    ap.add_argument("--cors", action="store_true",
+                    help="允许网页跨域调用本机转发服务（任意网站可合成，烧Key配额）")
     args = ap.parse_args()
     modes = [bool(args.install_component), args.version, args.smoke_test,
              bool(args.installation_check), args.server]
     if sum(1 for m in modes if m) > 1:
         ap.error('--version/--smoke-test/--installation-check/--install-component/--server 只能指定其一')
+    if (args.cors or args.port is not None) and not args.server:
+        ap.error('--cors/--port 需要与 --server 联用')
     if args.install_component:
         import components
         name, archive = args.install_component
@@ -381,7 +385,7 @@ def main():
             except Exception:
                 pass  # 解析失败回退默认人声，转发服务仍可用
         try:
-            forward_server.run_server(port, synth, vlist)
+            forward_server.run_server(port, synth, vlist, cors=args.cors)
         except OSError as e:
             raise SystemExit(f"端口 {port} 启动失败: {e}")
         return

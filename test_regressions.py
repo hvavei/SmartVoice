@@ -460,17 +460,40 @@ class DocumentTests(unittest.TestCase):
     def test_oversized_documents_rejected(self):
         import documents
         import zipfile
+        xml_head = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    '<w:body><w:p><w:r><w:t>')
+        xml_tail = '</w:t></w:r></w:p></w:body></w:document>'
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
+            # 配图再大也不误杀：只看正文大小
+            media = tmp / 'media.docx'
+            with zipfile.ZipFile(media, 'w', compression=zipfile.ZIP_STORED) as z:
+                for i in range(33):
+                    z.writestr(f'word/media/f{i}.bin', 'x' * (1024 * 1024))
+                z.writestr('word/document.xml', xml_head + 'hi' + xml_tail)
+            self.assertEqual(documents.read_document(media), 'hi')
+            # 正文超限才拒绝
             big = tmp / 'big.docx'
             with zipfile.ZipFile(big, 'w', compression=zipfile.ZIP_STORED) as z:
-                for i in range(33):
-                    z.writestr(f'f{i}.txt', 'x' * (1024 * 1024))
-                z.writestr('word/document.xml',
-                           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-                           '<w:body><w:p><w:r><w:t>hi</w:t></w:r></w:p></w:body></w:document>')
+                z.writestr('word/document.xml', xml_head + 'y' * (33 * 1024 * 1024) + xml_tail)
             with self.assertRaisesRegex(ValueError, '过大'):
                 documents.read_document(big)
+
+    def test_docx_pdf_long_path_reads(self):
+        import documents
+        import os
+        import storage
+        if os.name != 'nt':
+            self.skipTest('Windows long paths')
+        with tempfile.TemporaryDirectory() as tmp:
+            deep = Path(tmp)
+            while len(str(deep)) < 260:
+                deep = deep / 'subdir-deep-name'
+            Path(storage.long_path(deep)).mkdir(parents=True, exist_ok=True)
+            target = deep / 'doc.txt'
+            Path(storage.long_path(target)).write_text('hello', encoding='utf-8')
+            self.assertEqual(documents.read_text(target), 'hello')
+            self.assertGreater(len(str(target)), 260)
 
 
 class PolyphoneTests(unittest.TestCase):
@@ -689,6 +712,16 @@ class GuiTests(unittest.TestCase):
         pending = a._cfg_pending
         self.assertEqual(pending["key"], "")
         self.assertEqual(pending["engine_profiles"]["azure"]["key"], "")
+
+    def test_cors_toggle_persists_off_by_default(self):
+        a = self.app
+        self.assertFalse(a.cors_var.get())
+        a.cors_var.set(True)
+        a._save_cfg()
+        self.assertTrue(a._cfg_pending.get("cors"))
+        a.cors_var.set(False)
+        a._save_cfg()
+        self.assertFalse(a._cfg_pending.get("cors"))
 
     def test_theme_palettes_are_valid_and_readable(self):
         import theme
@@ -1280,6 +1313,27 @@ class GuiTests(unittest.TestCase):
                 a.switch_theme('warm')
                 self.root.update()
 
+    def test_watch_play_reads_length_as_attribute(self):
+        # 回归：length_ms 是属性不是方法，真播放进度曾全军覆没但被 mock 盖住。
+        a = self.app
+
+        class StubPlayer:
+            opened = True
+            length_ms = 60000
+
+            def position_ms(self):
+                return 1000
+
+            def is_playing(self):
+                return False
+
+            def stop(self):
+                pass
+
+        a.player = StubPlayer()
+        a._watch_play(a._seq)
+        self.assertEqual(str(a.play_time.cget('text')), '00:01 / 01:00')
+
     def test_toggle_server_rejects_bad_port(self):
         a = self.app
         a.selected = next(iter(a.voices))
@@ -1355,6 +1409,17 @@ class GuiTests(unittest.TestCase):
             a._begin_task(jobs, snap2, 'hi')
             self.assertNotIn('annotate', snap2)
             a._complete_task('cancelled')
+
+    def test_audition_cache_key_hides_credentials(self):
+        a = self.app
+        snap = {'engine': 'Azure(填Key)', 'voice': 'v', 'key': 'SECRET-KEY',
+                'ep': 'https://x/v1', 'region': 'eastus', 'rate': '100%', 'pitch': '+0Hz',
+                'vol': '+0%', 'style': '默认', 'degree': '100%', 'role': '默认'}
+        with patch.object(a, 'snapshot', return_value=dict(snap)):
+            a._audition_voice('显示', 'vid')
+        blob = repr(a._audition_pending_key)
+        self.assertNotIn('SECRET-KEY', blob)
+        self.assertNotIn('https://x/v1', blob)
 
 
 class StabilityTests(unittest.TestCase):
@@ -1632,6 +1697,70 @@ class DeepRegressionTests(unittest.TestCase):
             srv.server_close()
             forward_server._Handler.synth_fn = prev
 
+    def test_cors_disabled_by_default(self):
+        import http.client
+        import threading
+        import forward_server
+
+        prev_cors = forward_server._Handler.cors_enabled
+        forward_server._Handler.cors_enabled = False
+        srv = forward_server.ThreadingHTTPServer(('127.0.0.1', 0), forward_server._Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            conn = http.client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+            conn.request('GET', '/')
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            self.assertIsNone(resp.headers.get('Access-Control-Allow-Origin'))
+            resp.read()
+            conn.close()
+            conn = http.client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+            conn.request('OPTIONS', '/forward')
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 404)
+            self.assertIsNone(resp.headers.get('Access-Control-Allow-Origin'))
+            conn.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            forward_server._Handler.cors_enabled = prev_cors
+
+    def test_cors_enabled_serves_headers_and_preflight(self):
+        import http.client
+        import threading
+        import forward_server
+
+        prev_cors = forward_server._Handler.cors_enabled
+        prev_synth = forward_server._Handler.synth_fn
+        forward_server._Handler.cors_enabled = True
+        forward_server._Handler.synth_fn = staticmethod(lambda t, v, r: b"ID3cors")
+        srv = forward_server.ThreadingHTTPServer(('127.0.0.1', 0), forward_server._Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            conn = http.client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+            conn.request('OPTIONS', '/forward',
+                         headers={'Origin': 'https://example.com',
+                                  'Access-Control-Request-Method': 'POST'})
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 204)
+            self.assertEqual(resp.headers.get('Access-Control-Allow-Origin'), '*')
+            self.assertIn('POST', resp.headers.get('Access-Control-Allow-Methods'))
+            conn.close()
+            conn = http.client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
+            conn.request('POST', '/forward', body=json.dumps({"text": "hi"}),
+                         headers={'Content-Type': 'application/json',
+                                  'Origin': 'https://example.com'})
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get('Access-Control-Allow-Origin'), '*')
+            self.assertEqual(resp.read(), b"ID3cors")
+            conn.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            forward_server._Handler.cors_enabled = prev_cors
+            forward_server._Handler.synth_fn = prev_synth
+
     def test_saturated_forward_server_rejects_with_503(self):
         import socket
         import threading
@@ -1817,6 +1946,36 @@ class DeepRegressionTests(unittest.TestCase):
                     patch.object(docutils, '_ocr_pages', side_effect=error):
                 self.assertEqual(docutils.extract_pdf_text('unused', ocr=True), '文本页')
 
+    def test_ffmpeg_import_failure_is_friendly(self):
+        import docutils
+        with patch.dict('sys.modules', {'imageio_ffmpeg': None}):
+            with self.assertRaisesRegex(RuntimeError, 'FFmpeg'):
+                docutils._ffmpeg_path()
+
+    def test_ocr_dependency_failure_keeps_text_pages(self):
+        import docutils
+        pages = [Mock()]
+        pages[0].extract_text.return_value = '文本页'
+        for error in (ImportError('no numpy'), OSError('dll load failed')):
+            with patch('pypdf.PdfReader', return_value=Mock(pages=pages)), \
+                    patch.object(docutils, '_ocr_pages', side_effect=error):
+                self.assertEqual(docutils.extract_pdf_text('unused', ocr=True), '文本页')
+
+    def test_ffmpeg_missing_package_maps_to_runtime_error(self):
+        import docutils
+        with patch.dict('sys.modules', {'imageio_ffmpeg': None}):
+            with self.assertRaisesRegex(RuntimeError, 'FFmpeg 缺失'):
+                docutils._ffmpeg_path()
+
+    def test_ocr_dependency_failure_keeps_text_pages(self):
+        import docutils
+        pages = [Mock()]
+        pages[0].extract_text.return_value = '文本页'
+        for error in (ImportError('no numpy'), OSError('dll load failed')):
+            with patch('pypdf.PdfReader', return_value=Mock(pages=pages)), \
+                    patch.object(docutils, '_ocr_pages', side_effect=error):
+                self.assertEqual(docutils.extract_pdf_text('unused', ocr=True), '文本页')
+
     def test_cli_modes_are_mutually_exclusive(self):
         import main as entry
         with patch.object(sys, 'argv', ['SmartVoice', '--version', '--server']):
@@ -1824,7 +1983,13 @@ class DeepRegressionTests(unittest.TestCase):
                 entry.main()
             self.assertEqual(cm.exception.code, 2)
         with patch.object(sys, 'argv', ['SmartVoice', '--version', '--port', '0']):
-            self.assertIsNone(entry.main())  # 端口只约束 --server，不误伤其它模式
+            with self.assertRaises(SystemExit) as cm:
+                entry.main()
+            self.assertEqual(cm.exception.code, 2)  # --port 必须与 --server 联用，不再静默丢弃
+        with patch.object(sys, 'argv', ['SmartVoice', '--cors']):
+            with self.assertRaises(SystemExit) as cm:
+                entry.main()
+            self.assertEqual(cm.exception.code, 2)  # --cors 同理
 
     def test_verify_rejects_missing_files(self):
         import verify_installer
@@ -1851,15 +2016,32 @@ class DeepRegressionTests(unittest.TestCase):
         with patch.object(sys, 'argv', ['SmartVoice', '--server']), \
                 patch.object(engine, 'load_json', return_value=dict(cfg)), \
                 patch('forward_server.run_server',
-                      side_effect=lambda port, s, v: seen.setdefault('port', port)):
+                      side_effect=lambda port, s, v, **kw: seen.setdefault('port', port)):
             entry.main()
             self.assertEqual(seen['port'], 9111)
         with patch.object(sys, 'argv', ['SmartVoice', '--server', '--port', '9222']), \
                 patch.object(engine, 'load_json', return_value=dict(cfg)), \
                 patch('forward_server.run_server',
-                      side_effect=lambda port, s, v: seen.setdefault('port2', port)):
+                      side_effect=lambda port, s, v, **kw: seen.setdefault('port2', port)):
             entry.main()
             self.assertEqual(seen['port2'], 9222)
+
+    def test_server_passes_cors_flag(self):
+        import main as entry
+        seen = {}
+        cfg = {'engine': 'Edge免费(免Key)'}
+        with patch.object(sys, 'argv', ['SmartVoice', '--server', '--cors']), \
+                patch.object(engine, 'load_json', return_value=dict(cfg)), \
+                patch('forward_server.run_server',
+                      side_effect=lambda port, s, v, **kw: seen.update(kw)):
+            entry.main()
+            self.assertTrue(seen.get('cors'))
+        with patch.object(sys, 'argv', ['SmartVoice', '--server']), \
+                patch.object(engine, 'load_json', return_value=dict(cfg)), \
+                patch('forward_server.run_server',
+                      side_effect=lambda port, s, v, **kw: seen.update(kw2=kw)):
+            entry.main()
+            self.assertFalse(seen.get('kw2', {}).get('cors', False))
 
     def test_diagnose_without_key_fails_fast(self):
         import diagnose_azure
@@ -1872,6 +2054,18 @@ class DeepRegressionTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as cm:
                     diagnose_azure.main()
                 self.assertEqual(cm.exception.code, 2)
+
+    def test_diagnose_modes_are_mutually_exclusive(self):
+        import diagnose_azure
+        with patch.object(sys, 'argv', ['diagnose_azure.py', '--voices', '--transcribe',
+                                        '--output', 'out']):
+            with self.assertRaises(SystemExit) as cm:
+                diagnose_azure.main()
+            self.assertEqual(cm.exception.code, 2)
+        with patch.object(sys, 'argv', ['diagnose_azure.py', '--voice', 'x']):
+            with self.assertRaises(SystemExit) as cm:
+                diagnose_azure.main()
+            self.assertEqual(cm.exception.code, 2)
 
     def test_ffmpeg_error_hides_paths(self):
         import docutils
@@ -2025,8 +2219,8 @@ class PrepareTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             src_old, src_new = tmp / 'old.png', tmp / 'new.png'
-            Image.new('RGB', (64, 48), 'navy').save(src_old)
-            Image.new('RGB', (64, 48), 'maroon').save(src_new)
+            Image.new('RGB', (512, 512), 'navy').save(src_old)
+            Image.new('RGB', (512, 512), 'maroon').save(src_new)
             dest = tmp / 'assets'
             prepare_branding.prepare(src_old, dest)
             before = {p.name: p.read_bytes() for p in dest.iterdir()}
@@ -2049,6 +2243,81 @@ class PrepareTests(unittest.TestCase):
             for img in ('smartvoice.png', 'wizard-image.bmp', 'wizard-small.bmp'):
                 with Image.open(dest / img) as picture:
                     picture.load()
+
+    def test_download_rejects_oversized_stream(self):
+        import prepare_models
+        import requests
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'models' / 'g2pw'
+            self._write_fake_assets(target)
+            (target / 'vocab.txt').unlink()
+
+            class BigResp:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def raise_for_status(self):
+                    pass
+
+                def iter_content(self, n):
+                    yield b'x' * (6 * 1024**2)
+
+            fake_module = str(Path(tmp) / 'prepare_models.py')
+            with patch.object(prepare_models, '__file__', fake_module), \
+                    patch.object(requests, 'get', return_value=BigResp()):
+                with self.assertRaisesRegex(ValueError, '超出预期'):
+                    prepare_models.prepare()
+            self.assertFalse((target / 'vocab.txt.part').exists())
+            self.assertFalse((target / 'vocab.txt').exists())
+
+    def test_prepare_heals_corrupt_file(self):
+        import prepare_models
+        import requests
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'models' / 'g2pw'
+            self._write_fake_assets(target, corrupt='bad-json')
+
+            class GoodResp:
+                def __init__(self, data):
+                    self._data = data
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def raise_for_status(self):
+                    pass
+
+                def iter_content(self, n):
+                    yield self._data
+
+            def fake_get(url, **kwargs):
+                name = url.rsplit('/', 1)[-1]
+                if name != 'char_bopomofo_dict.json':
+                    raise AssertionError('unexpected download: ' + url)
+                return GoodResp(b'{"a": 1}')
+
+            fake_module = str(Path(tmp) / 'prepare_models.py')
+            with patch.object(prepare_models, '__file__', fake_module), \
+                    patch.object(requests, 'get', side_effect=fake_get):
+                prepare_models.prepare()
+            self.assertEqual(json.loads((target / 'char_bopomofo_dict.json').read_text(encoding='utf-8')),
+                             {"a": 1})
+
+    def test_branding_rejects_tiny_source(self):
+        import prepare_branding
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            tiny = tmp / 'tiny.png'
+            Image.new('RGB', (64, 48), 'navy').save(tiny)
+            with self.assertRaisesRegex(ValueError, '过小'):
+                prepare_branding.prepare(tiny, tmp / 'assets')
 
 
 class SynthJobsTests(unittest.TestCase):

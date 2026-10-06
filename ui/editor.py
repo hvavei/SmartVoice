@@ -5,7 +5,7 @@ from tkinter import ttk
 import theme
 
 
-def build_editor(app, f4, IX, IY, placeholder):
+def build_editor(app, f4, IX, IY):
     title_row = ttk.Frame(f4)
     shadow, title = app._title_widget(title_row, "文本")
     shadow.pack(side="left")
@@ -25,7 +25,7 @@ def build_editor(app, f4, IX, IY, placeholder):
                        highlightcolor=theme.ACCENT, padx=max(8, round(10 * app._zx())),
                        pady=max(4, round(6 * app._zx())))
     app.text.pack(fill="x", padx=IX, pady=IY)
-    app._setup_placeholder(placeholder)
+    app._setup_placeholder()
     app._bind_text_context_menu()
     app.editor_info = ttk.Frame(f4)
     app.editor_info.pack(fill='x', padx=IX)

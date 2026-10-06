@@ -452,16 +452,20 @@ class ProductUI:
         include_text = messagebox.askyesno('可选附件', '是否将当前原文加入报告？默认脱敏诊断无需原文。', default='no')
         include_audio = messagebox.askyesno('可选附件', '是否将最后导出的音频加入报告？', default='no') if self._last_export else False
         import io
-        memory = io.BytesIO()
-        with zipfile.ZipFile(memory, 'w', compression=zipfile.ZIP_DEFLATED) as z:
-            data = self._diag.snapshot() if self._diag else {'software': appmeta.NAME, 'version': appmeta.VERSION}
-            z.writestr('diagnostics.json', json.dumps(data, ensure_ascii=False, indent=2))
-            if include_text:
-                z.writestr('text.txt', self.text.get('1.0', 'end-1c'))
-            if include_audio and Path(self._last_export).is_file():
-                z.write(self._last_export, 'audio' + Path(self._last_export).suffix)
-        storage.atomic_bytes(path, memory.getvalue())
-        self.status.config(text='问题报告已导出；不会自动上传')
+        text = self.text.get('1.0', 'end-1c') if include_text else None
+        audio = str(self._last_export) if include_audio and Path(self._last_export).is_file() else None
+        diag = self._diag.snapshot() if self._diag else {'software': appmeta.NAME, 'version': appmeta.VERSION}
+        def work():
+            memory = io.BytesIO()
+            with zipfile.ZipFile(memory, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+                z.writestr('diagnostics.json', json.dumps(diag, ensure_ascii=False, indent=2))
+                if text is not None:
+                    z.writestr('text.txt', text)
+                if audio is not None:
+                    z.write(audio, 'audio' + Path(audio).suffix)
+            storage.atomic_bytes(path, memory.getvalue())
+            return lambda: self.status.config(text='问题报告已导出；不会自动上传')
+        self._bg(work)
 
     def open_data_dir(self):
         storage.DATA_DIR.mkdir(parents=True, exist_ok=True)

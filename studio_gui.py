@@ -106,6 +106,7 @@ class App(ProductUI):
         self.filter_var = tk.StringVar(value="全部")
         self.gender_var = tk.StringVar(value="全部")
         self.port_var = tk.StringVar(value=str(cfg.get("port", "8774")))
+        self.cors_var = tk.BooleanVar(value=cfg_bool(cfg.get("cors", False)))
         self.zoom_var = tk.IntVar(value=cfg_int(cfg.get("zoom", 100), 100, 80, 150))
         self.text_content = ""
         self.voices = {}
@@ -419,7 +420,7 @@ class App(ProductUI):
         build_toolbar(self, f5)
 
     def _setup_f4(self, f4, IX, IY):
-        build_editor(self, f4, IX, IY, AUDITION_TEXT)
+        build_editor(self, f4, IX, IY)
     def _setup_f3_content(self, voice_box, dub_box, IX, IY):
         build_voicepanel(self, voice_box, IX, IY)
         build_dubpanel(self, dub_box, IX, IY)
@@ -467,7 +468,7 @@ class App(ProductUI):
                    activeforeground="white",
                    highlightbackground=GREEN if on else GREY)
 
-    def _setup_placeholder(self, placeholder):
+    def _setup_placeholder(self):
         """提示是覆盖标签，不写进原稿和撤销栈。"""
         self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 双击打开大窗口编辑',
                                             bg=PANEL, fg=MUTED, font=self._font())
@@ -511,13 +512,19 @@ class App(ProductUI):
         widget._sv_ctx_menu = menu
 
         def undo():
-            widget.focus_set()
-            widget.edit_undo()
+            try:
+                widget.focus_set()
+                widget.edit_undo()
+            except tk.TclError:
+                pass  # 空栈无事可做，不弹框
             self._schedule_editor_info()
 
         def redo():
-            widget.focus_set()
-            widget.edit_redo()
+            try:
+                widget.focus_set()
+                widget.edit_redo()
+            except tk.TclError:
+                pass
             self._schedule_editor_info()
 
         def paste():
@@ -956,6 +963,7 @@ class App(ProductUI):
                 "pitch_v": cfg_int(self.pitch_var.get(), 0, -12, 12), "style": self.style_var.get(),
                 "degree": self.deg_var.get(), "role": self.role_var.get(),
                 "port": self.port_var.get().strip(), "zoom": cfg_int(self.zoom_var.get(), 100, 80, 150),
+                "cors": bool(self.cors_var.get()),
                 "remember_key": bool(self.remember_var.get()),
                 "theme": self._theme_name,
                 "key": self.key_var.get() if self.remember_var.get() else "",
@@ -1309,7 +1317,8 @@ class App(ProductUI):
         if seq != self._seq:
             return
         try:
-            self.play_time.config(text=f'{format_clock(self.player.position_ms())} / {format_clock(self.player.length_ms())}')
+            total = getattr(self.player, 'length_ms', 0) or 0
+            self.play_time.config(text=f'{format_clock(self.player.position_ms())} / {format_clock(total)}')
             if self.player.is_playing():
                 self._play_watch = self.root.after(200, lambda: self._watch_play(seq))
                 return
@@ -1691,6 +1700,9 @@ class App(ProductUI):
         display = next((name for name, iid in self._iid.items() if iid == row), None)
         if display is not None:
             self.selected = display
+            self._save_cfg()
+            self._refresh_style_state()
+            self.status.config(text=self._voice_status(display))
             self.on_audition()
         return "break"
 
@@ -1826,7 +1838,12 @@ class App(ProductUI):
                 raise RuntimeError("请先在多人配音区勾选至少1人")
             for line in txt.splitlines():
                 match = re.match(r'^\s*\[([^\]]+)\]', line)
-                if match and match.group(1).strip() not in names:
+                if not match:
+                    continue
+                cand = match.group(1).strip()
+                # 与 engine.parse_dub_script 的 [数字] 规则对齐：1..N 数字槽位同样合法。
+                if cand not in names and not (
+                        re.fullmatch(r"\d{1,2}", cand) and 1 <= int(cand) <= len(names)):
                     raise ValueError(f'未绑定或未启用的角色：{match.group(1)}')
             segs = engine.parse_dub_script(txt, names)
             if not segs:
@@ -2136,6 +2153,7 @@ class App(ProductUI):
 
         forward_server._Handler.synth_fn = staticmethod(synth_fn)
         forward_server._Handler.voices_fn = staticmethod(voices_fn)
+        forward_server._Handler.cors_enabled = bool(self.cors_var.get())
         try:
             # 仅绑定回环地址：无鉴权的合成接口不应暴露给局域网，浏览器插件等本机调用不受影响。
             self.server = forward_server.BoundedThreadingHTTPServer(("127.0.0.1", port),

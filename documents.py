@@ -8,6 +8,7 @@ _SENT_END = '。！？!?…'
 _MARKER = re.compile(r'^(?:\[[^\]]+\]|[^:：\s]{1,12}[:：]|#{1,6}\s|[-*•]\s|\d+[.)、]\s)')
 _NEWLINES = re.compile(r'\r\n|[\r\u2028\u2029\x85\x0b\x0c]')
 _SRT_TAG = re.compile(r'</?(?:font|b|i|u|s|ruby|rt)\b[^>]*>', re.I)
+_TS_LINE = re.compile(r'^\s*\d{1,2}:\d{2}:\d{2}[,\.]\d+\s*-->\s*\d{1,2}:\d{2}')
 _LRC_TAG = re.compile(r'\[(?:\d+:\d+(?::\d+(?:\.\d+)?)?(?:\.\d+)?|(?:ar|ti|al|by|offset|length|re|ve):[^\]]*)\]', re.I)
 
 
@@ -105,12 +106,15 @@ def read_document(path):
         import storage
         try:
             with zipfile.ZipFile(storage.long_path(path)) as z:
-                if sum(i.file_size for i in z.infolist()) > MAX_TEXT_BYTES:
-                    raise ValueError('文档过大（超过32MB），请拆分后导入')
                 try:
-                    data = z.read('word/document.xml')
+                    info = z.getinfo('word/document.xml')
                 except KeyError:
                     raise ValueError('DOCX 缺少正文，请另存后导入')
+                if info.file_size > MAX_TEXT_BYTES:
+                    raise ValueError('文档过大（超过32MB），请拆分后导入')
+                data = z.read('word/document.xml')
+                if len(data) > MAX_TEXT_BYTES:
+                    raise ValueError('文档过大（超过32MB），请拆分后导入')
         except zipfile.BadZipFile as e:
             raise ValueError('DOCX 已损坏，请另存后导入') from e
         try:
@@ -142,11 +146,17 @@ def read_document(path):
             lines = block.split('\n')
             if lines and lines[0].strip().isdigit() and len(lines) > 1 and '-->' in lines[1]:
                 lines.pop(0)
-            lines = [_SRT_TAG.sub('', line) for line in lines if '-->' not in line]
+            lines = [_SRT_TAG.sub('', line) for line in lines if not _TS_LINE.search(line)]
             output.append('\n'.join(lines))
         return reflow_text('\n\n'.join(output))
     if extension == '.lrc':
-        return '\n'.join(_LRC_TAG.sub('', line) for line in text.split('\n'))
+        out = []
+        for line in text.split('\n'):
+            line = re.sub(r'\]\s*\[', '] [', line)  # 同行多标签先隔开，避免粘连
+            line = _LRC_TAG.sub('', line)
+            line = re.sub(r'<\d+:\d+(?:\.\d+)?>', ' ', line)  # 词级时间戳：空格代替
+            out.append(line)
+        return '\n'.join(out)
     # JSON/CSV 保持原始行/空行，避免擅自将结构化数据改写为台词。
     if extension in ('.json', '.csv'):
         return text

@@ -121,20 +121,25 @@ Write-Output "THUMB=$($cert.Thumbprint)"
 '''
 
 
+THUMB_HEX_LEN = 40  # SHA1 指纹十六进制长度
+PS_ERR_TAIL = 400  # 构建错误只留末尾，避免整段输出刷屏
+
+
 def ensure_self_signed(work, export_path):
     """创建/复用本机自签代码签名证书并装入当前用户根信任库（替代已废弃的 makecert）。"""
+    import re
     script = work / 'ensure-self-signed.ps1'
     script.write_text(SELF_SIGNED_PS1, encoding='utf-8')
     result = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                              '-File', str(script), '-ExportPath', str(export_path)],
                             capture_output=True, text=True, encoding='utf-8', errors='replace')
     if result.returncode:
-        raise RuntimeError('Self-signed certificate setup failed: '
-                           + (result.stderr or result.stdout or '')[-400:])
+        detail = re.sub(r'[A-Za-z]:\\[^"\s]*', '<path>', result.stderr or result.stdout or '')
+        raise RuntimeError('Self-signed certificate setup failed: ' + detail[-PS_ERR_TAIL:])
     lines = [line.strip() for line in (result.stdout or '').splitlines()
              if line.strip().startswith('THUMB=')]
     thumb = lines[-1][len('THUMB='):] if lines else ''
-    if len(thumb) != 40 or any(ch not in '0123456789ABCDEF' for ch in thumb):
+    if len(thumb) != THUMB_HEX_LEN or any(ch not in '0123456789ABCDEF' for ch in thumb):
         raise RuntimeError('Self-signed certificate setup returned no thumbprint')
     if not export_path.is_file():
         raise RuntimeError('Self-signed certificate export failed')
@@ -178,6 +183,8 @@ def main():
     # 新版 SDK signtool 拒绝 https 时间戳 URL；RFC3161 时间戳标准走 http。
     parser.add_argument('--timestamp', default='http://timestamp.digicert.com')
     args = parser.parse_args()
+    if args.timestamp.startswith('https://'):
+        parser.error('--timestamp must be http:// RFC3161 (SDK signtool rejects https)')
     work = args.workdir.resolve()
     work.mkdir(parents=True, exist_ok=True)
     compiler = args.compiler or (fetch_compiler(work) if args.fetch_compiler else None)
@@ -216,7 +223,7 @@ def main():
         signed = sign_file(folder / 'SmartVoice.exe', args) and signed
         subprocess.run([str(compiler), f'/DSourceDir={folder}', f'/DOutputDir={release}', f'/DEdition={edition}',
                         str(ROOT / 'installer.iss')], cwd=ROOT, check=True)
-        sign_file(release / f'SmartVoice-Setup-{edition}.exe', args)
+        signed = sign_file(release / f'SmartVoice-Setup-{edition}.exe', args) and signed
     if args.self_signed:
         status = (f'SELF-SIGNED: CN=SmartVoice (Self-Signed) {args.certificate_thumbprint}; '
                   'verified on this machine only, install SmartVoice-Signing-Root.cer elsewhere')

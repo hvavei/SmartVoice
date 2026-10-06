@@ -16,8 +16,13 @@ MAX_QUEUED = 16      # 排队上限，再多直接 503（防 Slowloris 耗尽线
 class _Handler(BaseHTTPRequestHandler):
     synth_fn = None   # (text, voice, rate) -> bytes
     voices_fn = None  # () -> [{name, id, lang}]
+    cors_enabled = False  # 网页跨域调用开关：默认关；打开后任意网站可调本机服务（烧Key配额）
     server_version = f"SmartVoice/{appmeta.VERSION}"
     timeout = 30      # 连接/读写超时：慢速客户端与半开连接不会永久挂起线程
+
+    def _cors_headers(self):
+        if self.cors_enabled:
+            self.send_header("Access-Control-Allow-Origin", "*")
 
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -26,6 +31,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Connection", "close")
+            self._cors_headers()
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
@@ -37,6 +43,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "audio/mpeg")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Connection", "close")
+            self._cors_headers()
             self.end_headers()
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
@@ -93,13 +100,29 @@ class _Handler(BaseHTTPRequestHandler):
         return self._forward(body.get("text", ""), body.get("voice") or None,
                                body.get("rate", "+0%") or "+0%")
 
+    def do_OPTIONS(self):
+        if not self.cors_enabled:
+            return self._json({"error": "not found"}, 404)
+        try:
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+            pass
+
     def log_message(self, fmt, *args):
         pass
 
 
-def run_server(port, synth_fn, voices_fn, max_workers=MAX_WORKERS, queue_size=MAX_QUEUED):
+def run_server(port, synth_fn, voices_fn, max_workers=MAX_WORKERS, queue_size=MAX_QUEUED,
+               cors=False):
     _Handler.synth_fn = staticmethod(synth_fn)
     _Handler.voices_fn = staticmethod(voices_fn)
+    _Handler.cors_enabled = bool(cors)
     srv = BoundedThreadingHTTPServer(("127.0.0.1", port), _Handler,
                                      max_workers=max_workers, queue_size=queue_size)
     try:
