@@ -22,6 +22,7 @@ import storage
 import theme
 from config_store import ConfigStore
 from playback import MciPlayer, format_clock
+from progress_model import ProgressModel
 from task_manager import DaemonPool, TaskManager
 from ui.serverbar import build_serverbar
 from ui.toolbar import build_toolbar
@@ -117,8 +118,7 @@ class App(ProductUI):
         self._rebuilding = False
         # 9人配音槽位配置(持久化): [{name, voice(display名), on}]
         self.dub_cfg = self._valid_dub_cfg(cfg.get("multidub"))
-        self._prog = {"active": False, "mode": None, "total": 0,
-                      "done": 0, "seq": 0, "after": None}
+        self._prog = ProgressModel()
         self._tasks = TaskManager(
             schedule_fn=lambda ms, cb: self.root.after(ms, cb),
             cancel_fn=self.root.after_cancel,
@@ -1065,7 +1065,7 @@ class App(ProductUI):
             pass
 
     def _prog_cancel(self):
-        self._prog["active"] = False
+        self._prog.cancel()
         try:
             after = self._prog.get("after")
             if after:
@@ -1082,13 +1082,7 @@ class App(ProductUI):
 
     def _prog_begin(self, mode, total, seq, label):
         self._prog_cancel()
-        total = max(1, total)
-        self._prog.update({"active": True, "mode": mode, "total": total,
-                           "done": 0, "seq": seq, "stage": label,
-                           "index": 1, "received": 0, "bytes_total": 0,
-                           "started": time.monotonic(), "finished": False,
-                           "segments": {}, "completed": set(), "post_done": 0,
-                           "highwater": 0.0})
+        self._prog.begin(mode, total, seq, label)
         try:
             self.prog.pack(side="left", padx=(0, 6))
             self.prog_lab.pack(side="left")
@@ -1127,25 +1121,11 @@ class App(ProductUI):
         return progress, stage
 
     def _prog_render(self):
-        p = self._prog
-        if p.get("finished"):
+        rendered = self._prog.render()
+        if rendered is None:
             return
-        multi = p["mode"] == "multi"
-        received, total_bytes = p["received"], p["bytes_total"]
-        value = p["done"] + sum(s.get("fraction", 0) for i, s in p["segments"].items()
-                                if i not in p["completed"]) + p["post_done"]
-        p["highwater"] = max(p["highwater"], value)
-        self._prog_ui.update(mode="determinate", value=p["highwater"], maximum=p["total"] + 2)
-        text = p["stage"]
-        if received or total_bytes:
-            if total_bytes > 0:
-                text += f" {min(100, received * 100 // total_bytes)}%"
-            text += f" · {received / 1024:.1f} KB"
-        if multi:
-            text = f"已完成 {p['done']}/{p['total']}段 · " + text
-        elif not total_bytes and p["index"] > 0 and not p["done"]:
-            text += " · 等待云端进度"
-        text += f" · {int(time.monotonic() - p['started'])}秒"
+        value, text = rendered
+        self._prog_ui.update(mode="determinate", value=value, maximum=self._prog["total"] + 2)
         self.prog_lab.config(text=text)
         self._prog_draw()
 
@@ -1201,19 +1181,34 @@ class App(ProductUI):
             preview = getattr(self, '_task_preview', False)
             directory = str(storage.CACHE_DIR / 'auditions') if preview else options['directory']
             name = os.path.splitext(os.path.basename(out))[0] if preview else options['name']
+            out = os.path.join(directory, name + '.' + options['format'])
+            started = time.monotonic()
             if preview:
-                # 试听文件按名覆盖：同名旧文件先删，避免 cache\auditions 只增不减。
+                # 原子覆盖：先写临时文件再整体替换，播放中重写也不产生半截文件；
+                # 编号残留（历史降级产物）尽力清理，目标被占用时退回编号导出。
+                base = os.path.basename(out)
                 pattern = re.compile(re.escape(name) + r'(?:-\d+)?\.' + re.escape(options['format']))
                 from glob import escape
                 for old in Path(directory).glob(escape(name) + '*'):
-                    if old.is_file() and pattern.fullmatch(old.name):
+                    if old.name != base and old.is_file() and pattern.fullmatch(old.name):
                         try:
                             old.unlink()
                         except OSError:
                             pass
-            out = os.path.join(directory, name + '.' + options['format'])
-            started = time.monotonic()
-            path = self._save_audio(mp3 if options['format'] == 'mp3' else pcm, out)
+                data = mp3 if options['format'] == 'mp3' else pcm
+                tmp_path = os.path.join(directory, f'.preview-{seq}.tmp')
+                path = out
+                try:
+                    storage.atomic_bytes(tmp_path, data)
+                    os.replace(tmp_path, out)
+                except OSError:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    path = self._save_audio(data, out)
+            else:
+                path = self._save_audio(mp3 if options['format'] == 'mp3' else pcm, out)
             if self._diag:
                 self._diag.event('save_audio', duration_ms=round((time.monotonic()-started)*1000, 1))
         except Exception:
@@ -1290,7 +1285,8 @@ class App(ProductUI):
         timer = self._prog.get('after')
         if timer:
             self.root.after_cancel(timer)
-        self._prog.update(after=None, finished=True)
+        self._prog["after"] = None
+        self._prog.finish()
         self._prog_ui.update(mode='determinate', value=100, maximum=100)
         self._prog_draw(100)
         self.prog_lab.config(text='合成完成 · 待播放')
@@ -1393,24 +1389,16 @@ class App(ProductUI):
         if kind in ("segment", "progress", "phase", "synth_complete", "post_complete"):
             if seq == self._seq and self._prog.get("active") and seq == self._prog["seq"]:
                 if kind == "segment":
-                    self._prog["completed"].add(payload)
-                    self._prog["done"] = len(self._prog["completed"])
+                    self._prog.apply_segment(payload)
                 elif kind == "synth_complete":
-                    self._prog["completed"] = set(range(1, self._prog["total"] + 1))
-                    self._prog["done"] = self._prog["total"]
+                    self._prog.apply_synth_complete()
                 elif kind == "post_complete":
-                    self._prog["post_done"] = payload
+                    self._prog.apply_post_complete(payload)
                 elif kind == "phase":
                     label, index = payload
-                    self._prog.update(stage=label, index=index, received=0, bytes_total=0)
+                    self._prog.apply_phase(label, index)
                 else:
-                    cur, total = payload[:2]
-                    index = payload[2] if len(payload) > 2 else self._prog["index"]
-                    segment = self._prog["segments"].setdefault(index, {})
-                    if total > 0:
-                        segment["fraction"] = max(segment.get("fraction", 0), min(.99, cur / total))
-                    self._prog.update(received=cur, bytes_total=total, index=index)
-                    self._prog["stage"] = f"接收第{index}段" if self._prog["mode"] == "multi" else "接收音频"
+                    self._prog.apply_progress(*payload[:3])
                 return True
             return False
         self._bg_n = max(0, self._bg_n - 1)

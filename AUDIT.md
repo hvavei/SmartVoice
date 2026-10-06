@@ -137,6 +137,12 @@
 - 组件/构建：prepare 下载限流 + 失败清 .part；manifest 原子写；branding 小图拒收（<256px）；CLI --cors/--port 脱离 --server 即报错；diagnose 模式互斥 + --live 需 Key；安装包签名双版累积；验收卸载轮询命名常量、工作目录脱敏；自签错误脱敏 + 魔法数命名；时间戳 https 前置拒绝；组件包 slack 死拷贝删除。
 - 回归：全套 206 项 OK（+12），冒烟 13 PASS。
 
+## ㉒ 收尾剩余项：ProgressModel/试听原子/兼容矩阵（2026-10-06）
+- 进度模型：`ProgressModel` 继承 dict（旧读写全兼容），分段聚合/highwater/文案计算搬入无 Tk 模块，App 只剩刷控件；4 项直调单测毫秒级（含文案逐字断言）。
+- 试听原子覆盖：同名文件改临时写 + 原子替换（播放中重写不出半截文件），占用时退回编号导出；回归发现测试文件内重复定义的用例，已去重。
+- 兼容矩阵：静态确认无 Win11 专属接口（DPAPI/winmm/ctypes 均为稳定 API，Tk 9 支持 Win10）；ARM64 无实机，按诚实原则仅文档化（允许仿真安装、速度未验证），不动安装门槛。
+- 回归：全套 211 项 OK（+5），冒烟 13 PASS。
+
 ## 本次交付范围
 - 主窗口/程序/安装包品牌改为 SmartVoice 3.0.0；正式仓库目标 https://github.com/hvavei/SmartVoice 。
 - 独立音色能力策略：VoiceType 只展示类别，StyleList/RolePlayList 控制可选值，SSML prosody/phoneme 按模型族策略判断。未知能力保守禁用非默认参数；多人任务逐音色校验，错误包含角色名，不静默降级/换声。

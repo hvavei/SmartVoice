@@ -1410,16 +1410,22 @@ class GuiTests(unittest.TestCase):
             self.assertNotIn('annotate', snap2)
             a._complete_task('cancelled')
 
-    def test_audition_cache_key_hides_credentials(self):
+    def test_preview_overwrite_is_atomic(self):
+        import tempfile
+        from pathlib import Path
+        import storage
         a = self.app
-        snap = {'engine': 'Azure(填Key)', 'voice': 'v', 'key': 'SECRET-KEY',
-                'ep': 'https://x/v1', 'region': 'eastus', 'rate': '100%', 'pitch': '+0Hz',
-                'vol': '+0%', 'style': '默认', 'degree': '100%', 'role': '默认'}
-        with patch.object(a, 'snapshot', return_value=dict(snap)):
-            a._audition_voice('显示', 'vid')
-        blob = repr(a._audition_pending_key)
-        self.assertNotIn('SECRET-KEY', blob)
-        self.assertNotIn('https://x/v1', blob)
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(storage, 'CACHE_DIR', Path(tmp)):
+            a._task_preview = True
+            a._task_export = {'directory': tmp, 'name': '试听', 'format': 'mp3',
+                              'leading_ms': 0, 'trailing_ms': 0, 'normalize': False}
+            out = str(Path(tmp) / 'auditions' / '试听.mp3')
+            a._prepare_playback(a._seq, None, out, '试听', prepared=(b'mp3-1', b'pcm-1'))
+            a._prepare_playback(a._seq, None, out, '试听', prepared=(b'mp3-2', b'pcm-2'))
+            self.assertEqual(Path(out).read_bytes(), b'mp3-2')
+            self.assertEqual(sorted(p.name for p in Path(out).parent.iterdir()), ['试听.mp3'])
+            a._task_preview = False
 
 
 class StabilityTests(unittest.TestCase):
@@ -2435,6 +2441,62 @@ class SynthJobsTests(unittest.TestCase):
         snap = {"engine": "Edge免费(免Key)", "_diag": diag}
         self.assertEqual(run_jobs(ctx, 5, [("v", "r", "x")], snap), [b"data"])
         diag.event.assert_called_with("cache_write_failed", error_type="OSError")
+
+
+class ProgressModelTests(unittest.TestCase):
+    def _model(self):
+        from progress_model import ProgressModel
+        model = ProgressModel()
+        model.begin('multi', 4, 9, '准备合成')
+        return model
+
+    def test_begin_and_cancel(self):
+        model = self._model()
+        self.assertTrue(model["active"])
+        self.assertEqual((model["mode"], model["total"], model["seq"]), ('multi', 4, 9))
+        self.assertEqual(model.get("active"), True)  # dict 兼容读法照常用
+        model.cancel()
+        self.assertFalse(model["active"])
+
+    def test_segment_progress_phase_complete_flows(self):
+        model = self._model()
+        model.apply_segment(2)
+        model.apply_segment(1)
+        self.assertEqual(model["done"], 2)
+        model.apply_progress(50, 100, 1)
+        model.apply_progress(100, 100, 1)
+        self.assertAlmostEqual(model["segments"][1]["fraction"], .99)
+        model.apply_phase('接收音频', 2)
+        self.assertEqual((model["stage"], model["index"], model["received"]), ('接收音频', 2, 0))
+        model.apply_synth_complete()
+        self.assertEqual(model["done"], 4)
+        model.apply_post_complete(1)
+        value, _ = model.render(now=model["started"] + 5)
+        self.assertEqual(value, 5)  # 4 段 + 整理保存 1 步
+
+    def test_render_text_and_highwater_monotonic(self):
+        from progress_model import ProgressModel
+        model = self._model()
+        value, text = model.render(now=model["started"] + 5)
+        self.assertEqual(value, 0)
+        self.assertEqual(text, '已完成 0/4段 · 准备合成 · 5秒')
+        single = ProgressModel()
+        single.begin('single', 1, 3, '准备合成')
+        _, text = single.render(now=single["started"] + 5)
+        self.assertIn('等待云端进度', text)
+        model.apply_progress(51200, 0, 1)
+        value, text = model.render(now=model["started"] + 6)
+        self.assertIn('50.0 KB', text)
+        model.apply_segment(1)
+        first, _ = model.render(now=model["started"] + 7)
+        model.apply_progress(0, 0, 1)
+        second, _ = model.render(now=model["started"] + 8)
+        self.assertGreaterEqual(second, first)  # highwater 只升不降
+
+    def test_finish_stops_render(self):
+        model = self._model()
+        model.finish()
+        self.assertIsNone(model.render())
 
 
 if __name__ == '__main__':
