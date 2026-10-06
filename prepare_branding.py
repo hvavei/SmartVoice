@@ -24,7 +24,8 @@ def _load_square(source):
     with Image.open(source) as original:
         if min(original.size) < 256:
             raise ValueError('源图过小（短边不足256px），请提供≥512px的正方形图，否则图标模糊')
-        image = ImageOps.exif_transpose(original).convert('RGB')
+        # 保留 alpha：旧 convert('RGB') 把透明黑 (0,0,0,0) 压成纯黑底图标。
+        image = ImageOps.exif_transpose(original).convert('RGBA')
     side = min(image.size)
     if side != image.size[0] or side != image.size[1]:
         image = ImageOps.fit(image, (side, side), Image.Resampling.LANCZOS, centering=(.5, .5))
@@ -76,18 +77,21 @@ def _center_text(draw, center_x, top_y, text, font, fill):
 
 
 def _wizard(base, size, with_text=True):
-    canvas = Image.new('RGB', size, base.getpixel((0, 0)))
+    bg = base.getpixel((0, 0))
+    canvas = Image.new('RGB', size, bg[:3] if isinstance(bg, tuple) else bg)
+    def _paste(frame, box):
+        canvas.paste(frame, box, frame if frame.mode == 'RGBA' else None)
     if with_text:
         side = round(size[0] * 0.68)
         x = (size[0] - side) // 2
         y = round(size[1] * 0.17)
-        canvas.paste(_frame(base, (side, side)), (x, y))
+        _paste(_frame(base, (side, side)), (x, y))
         draw = ImageDraw.Draw(canvas)
         _center_text(draw, size[0] // 2, y + side + 12, 'SmartVoice', _font(17, True), TITLE_FILL)
         _center_text(draw, size[0] // 2, y + side + 40, 'AI 桌面配音工作台', _font(10), SUBTITLE_FILL)
     else:
         side = round(min(size) * 0.8)
-        canvas.paste(_frame(base, (side, side)), ((size[0] - side) // 2, (size[1] - side) // 2))
+        _paste(_frame(base, (side, side)), ((size[0] - side) // 2, (size[1] - side) // 2))
     return canvas
 
 

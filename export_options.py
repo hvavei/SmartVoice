@@ -34,9 +34,9 @@ def validate_export_options(directory, name, fmt, leading_ms, trailing_ms, norma
         trailing_ms = int(trailing_ms)
     except (TypeError, ValueError):
         raise ValueError('首尾留白范围为0～5000毫秒')
-    options = {'directory': directory, 'name': name, 'format': str(fmt).lower(),
+    options = {'directory': str(directory or '').strip(), 'name': name, 'format': str(fmt).lower(),
                'leading_ms': leading_ms, 'trailing_ms': trailing_ms,
-               'normalize': bool(normalize)}
+               'normalize': _to_bool(normalize)}
     if options['format'] not in FORMATS or not options['directory']:
         raise ValueError('请设置有效输出目录和 MP3/WAV 格式')
     if not all(0 <= options[k] <= 5000 for k in ('leading_ms', 'trailing_ms')):

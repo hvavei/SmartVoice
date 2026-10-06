@@ -220,16 +220,31 @@ def main(argv=None):
         if not key:
             parser.error("诊断配置没有 Azure Key")
         engine.APP_DIR = str(cache_directory(args.config))
-        table = engine.refresh_voices_azure(key, region, endpoint)
+        try:
+            table = engine.refresh_voices_azure(key, region, endpoint)
+        except Exception as e:
+            import re
+            # 诊断日志会持久化：完整 endpoint（含内网主机/端口/查询串）只留主机名。
+            msg = re.sub(r'https?://([^/\s):]+)[^"\s)]*', r'<endpoint:\1>', str(e))
+            raise SystemExit(f'人声缓存刷新失败({type(e).__name__}): {msg[:300]}')
         print(json.dumps({'region': region, 'official_voices_saved': len(table)}, ensure_ascii=True))
     elif args.voices:
-        audit_voices(args.config, args.output)
+        _run_guarded(lambda: audit_voices(args.config, args.output))
     elif args.transcribe:
         if not args.output:
             parser.error("--transcribe requires --output")
-        transcribe_samples(args.config, args.output)
+        _run_guarded(lambda: transcribe_samples(args.config, args.output))
     else:
-        run(args.config, args.output, args.live, args.direct, args.voice, args.native_only)
+        _run_guarded(lambda: run(args.config, args.output, args.live, args.direct, args.voice, args.native_only))
+
+
+def _run_guarded(fn):
+    """输出路径 OSError（不可写/盘满）带用户全路径：脱敏再退出，不抛堆栈。"""
+    import re
+    try:
+        fn()
+    except OSError as e:
+        raise SystemExit(re.sub(r'[A-Za-z]:\\[^"\s]*', '<path>', f'文件写入失败: {e}'))
 
 
 if __name__ == "__main__":

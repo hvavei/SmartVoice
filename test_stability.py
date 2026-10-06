@@ -81,8 +81,8 @@ class ResourceTests(unittest.TestCase):
         context.__enter__ = Mock(return_value=pdf)
         context.__exit__ = Mock(return_value=False)
         with patch('docutils.create_ocr'), patch('pypdfium2.PdfDocument', return_value=context):
-            with self.assertRaisesRegex(RuntimeError, '第 3 页'):
-                docutils._ocr_pages('unused.pdf', [2])
+            # 单页失败只丢这一页（旧逻辑整批作废）：返回部分成果，调用方全空才报错。
+            self.assertEqual(docutils._ocr_pages('unused.pdf', [2]), {})
         page.close.assert_called_once()
         context.__exit__.assert_called_once()
 

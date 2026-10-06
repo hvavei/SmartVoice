@@ -49,4 +49,5 @@ def build_product_menu(app):
     bar.add_cascade(label='关于', menu=about)
 
     app.root.configure(menu=bar)
-    app.root.bind('<Control-s>', lambda e: (app.save_project(), 'break')[-1])
+    # 全局保存：独立子窗口内的 Ctrl+S 与主窗一致（此前只绑 root，子窗无反应）。
+    app.root.bind_all('<Control-s>', lambda e: (app.save_project(), 'break')[-1])

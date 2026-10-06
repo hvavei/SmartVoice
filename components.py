@@ -131,6 +131,28 @@ def _cleanup_stale_tmp():
         pass
 
 
+def gc_stale_components():
+    """回收跨 ABI 残留的旧版本组件目录（如 Python 升级后 700MB 的 g2pw 旧包）。
+    _entry 在 ABI 不一致时早抛、activate 到不了清理分支，这里不依赖清单独立判断：
+    只删非当前指针目录、且不在 sys.path（未被加载）的 name-* 目录。"""
+    try:
+        for name in NAMES:
+            try:
+                pointer = storage.read_json(COMPONENT_DIR / f'{name}.json')
+                keep = pointer.get('folder') if isinstance(pointer, dict) else None
+            except OSError:
+                keep = None
+            for d in COMPONENT_DIR.glob(f'{name}-*'):
+                try:
+                    if (d.is_dir() and d.name != keep and str(d) not in sys.path
+                            and str(d.resolve()) not in sys.path):
+                        shutil.rmtree(d, ignore_errors=True)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def install_archive(name, archive_path, progress=None, cancelled=None):
     entry = _entry(name)
     path = Path(archive_path)
@@ -201,23 +223,29 @@ def download(name, progress=None, cancelled=None):
         _cleanup_stale_tmp()
     with tempfile.TemporaryDirectory(prefix='download-', dir=COMPONENT_DIR) as tmp:
         archive = Path(tmp) / 'component.zip'
-        with requests.get(url, stream=True, timeout=(10, 30)) as response:
-            if response.status_code == 404:
-                raise RuntimeError('该版本组件尚未上传到 GitHub Releases；请先发布组件包或选择本地导入')
-            response.raise_for_status()
-            if urlsplit(response.url).scheme != 'https':
-                raise ValueError('组件下载跳转到非HTTPS地址')
-            received = 0
-            with archive.open('wb') as f:
-                for block in response.iter_content(256 * 1024):
-                    if cancelled and cancelled.is_set():
-                        raise RuntimeError('组件下载已取消')
-                    received += len(block)
-                    if received > entry['bytes']:
-                        raise ValueError('组件响应超出预期大小')
-                    f.write(block)
-                    if progress:
-                        progress(received, entry['bytes'], '下载')
+        try:
+            with requests.get(url, stream=True, timeout=(10, 30)) as response:
+                if response.status_code == 404:
+                    raise RuntimeError('该版本组件尚未上传到 GitHub Releases；请先发布组件包或选择本地导入')
+                response.raise_for_status()
+                if urlsplit(response.url).scheme != 'https':
+                    raise ValueError('组件下载跳转到非HTTPS地址')
+                received = 0
+                with archive.open('wb') as f:
+                    for block in response.iter_content(256 * 1024):
+                        if cancelled and cancelled.is_set():
+                            raise RuntimeError('组件下载已取消')
+                        received += len(block)
+                        if received > entry['bytes']:
+                            raise ValueError('组件响应超出预期大小')
+                        f.write(block)
+                        if progress:
+                            progress(received, entry['bytes'], '下载')
+        except (RuntimeError, ValueError):
+            raise
+        except Exception as e:
+            # 超时/断网等 requests 原始异常：转用户可读错，不抛堆栈原文。
+            raise RuntimeError(f'组件下载失败（{type(e).__name__}），请检查网络后重试') from e
         if cancelled and cancelled.is_set():
             raise RuntimeError('组件下载已取消')
         return install_archive(name, archive, progress, cancelled)

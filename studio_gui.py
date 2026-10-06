@@ -128,6 +128,11 @@ class App(ProductUI):
         self._tasks.is_active = lambda: self._prog.get("active")
         self._dub = {}  # 重建时重填的配音控件引用
         self._load_engine_voices()
+        try:
+            import components
+            components.gc_stale_components()  # 跨 ABI 残留旧包只在启动回收一次
+        except OSError:
+            pass
         self._theme_name = theme.apply(cfg.get("theme", theme.DEFAULT_THEME),
                                        globals(), sys.modules.get("product_ui"))
         self._theme_var = tk.StringVar(value=self._theme_name)
@@ -135,8 +140,9 @@ class App(ProductUI):
         icon = Path(__file__).resolve().parent / 'assets' / 'smartvoice.ico'
         if icon.is_file():
             root.iconbitmap(default=str(icon))
-        root.geometry("980x900")
-        root.minsize(640, 640)
+        w0, h0 = self._clamp_wh(980, 900)
+        root.geometry(f"{w0}x{h0}")
+        root.minsize(640, min(640, h0))
         root.configure(bg=BG)
         self._build_ui()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -340,8 +346,8 @@ class App(ProductUI):
                 widget.destroy()
         self._dub = {}
         self._theme()
-        # 放大字体时同步保留列表区的最小可用高度。
-        self.root.minsize(640, max(700, round(700 * self._zx())))
+        # 放大字体时同步保留列表区的最小可用高度，但不超过屏幕（高 DPI 防裁）。
+        self.root.minsize(640, self._clamp_minh(max(700, round(700 * self._zx()))))
         self._flowbars = []
         root = self.root
         PX, PY, IX, IY = self._pads()
@@ -438,9 +444,9 @@ class App(ProductUI):
         if self.tree.identify_region(event.x, event.y) == 'separator':
             return 'break'
 
-    def _open_editor_double_click(self, event=None):
+    def _open_editor_by_gesture(self, event=None):
+        # 三击开大窗：双击保留给 Text 类默认选词，不再劫持。
         self.open_editor()
-        return 'break'  # 阻止 Text 类默认双击选词和继续分发。
 
 
     # ---- 开关色块 ----
@@ -470,10 +476,10 @@ class App(ProductUI):
 
     def _setup_placeholder(self):
         """提示是覆盖标签，不写进原稿和撤销栈。"""
-        self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 双击打开大窗口编辑',
-                                            bg=PANEL, fg=MUTED, font=self._font())
+        self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 三击打开大窗口编辑',
+                                             bg=PANEL, fg=MUTED, font=self._font())
         self._placeholder_label.bind('<Button-1>', lambda e: (self._placeholder_label.place_forget(), self.text.focus_set()))
-        self._placeholder_label.bind('<Double-Button-1>', self._open_editor_double_click)
+        self._placeholder_label.bind('<Triple-Button-1>', self._open_editor_by_gesture)
         self.text.bind('<FocusIn>', lambda e: self._placeholder_label.place_forget())
         self.text.bind('<FocusOut>', lambda e: self._schedule_editor_info())
         if self.text_content:
@@ -755,9 +761,10 @@ class App(ProductUI):
                 self.lab_key.config(text="Key:")
                 self.lab_region.config(text="Region:")
                 self.lab_ep.config(text="终结点:")
-                self.key_entry.config(state="disabled")
-                self.region_entry.config(state="disabled")
-                self.ep_entry.config(state="disabled")
+                # Edge 免费无凭证：readonly 可选中复制旧 Key，disabled 连复制都不行。
+                self.key_entry.config(state="readonly")
+                self.region_entry.config(state="readonly")
+                self.ep_entry.config(state="readonly")
             elif kind == "openai":
                 self.lab_key.config(text="Key:")
                 self.lab_region.config(text="模型:")
@@ -798,7 +805,7 @@ class App(ProductUI):
     def on_zoom(self):
         # 原地更新字体，保留原稿、撤销栈和独立编辑窗口。
         self._theme()
-        self.root.minsize(640, max(700, round(700*self._zx())))
+        self.root.minsize(640, self._clamp_minh(max(700, round(700*self._zx()))))
         def update(widget):
             try:
                 if 'font' in widget.keys():
@@ -833,11 +840,15 @@ class App(ProductUI):
             self.text_content = self.text.get('1.0', 'end-1c')
         except (tk.TclError, AttributeError):
             pass
-        for attr in ("_editor_window", "_export_win", "_component_win"):
+        for attr, handler in (("_editor_window", None), ("_export_win", "_sv_dismiss"),
+                               ("_component_win", "_sv_close")):
             win = getattr(self, attr, None)
             try:
                 if win is not None and win.winfo_exists():
-                    win.destroy()
+                    # 走窗口自己的协议出口：导出窗恢复非法值、组件窗取消下载；
+                    # 直接 destroy 会绕过它们（脏 Var 残留 / 孤儿线程继续写盘）。
+                    fn = getattr(win, handler, None) if handler else None
+                    (fn or win.destroy)()
             except tk.TclError:
                 pass
             setattr(self, attr, None)
@@ -1418,6 +1429,13 @@ class App(ProductUI):
     def _bg_run(self, work, seq):
         try:
             done = work()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as e:
+            # 工作线程里的 BaseException：旧 except Exception 兜不住，
+            # 线程裸死、无 fail 入队，busy 永远 True 卡死。转 fail 事件收尾。
+            self._bgq.put(("fail", seq, type(e).__name__))
+            return
         except Exception as e:
             if seq == self._seq and self._diag and self._active_task and not isinstance(e, workflow.Cancelled):
                 self._diag.event('failed', error_type=type(e).__name__)

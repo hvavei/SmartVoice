@@ -27,6 +27,11 @@ MODEL_DIR = str(_component_root / 'models' / 'g2pw') if _component_root is not N
 
 BATCH = 64
 WINDOW = 32  # 与随包 G2PW config.py 的训练上下文窗口一致
+# 分词/注音热点正则：逐字逐段触发，模块级预编译。
+_RE_WORD = re.compile(r' +|[a-zA-Z0-9]+|[^ ]')
+_RE_BERT_PREFIX = re.compile(r"^##")
+_RE_CJK = re.compile(r"[\u3400-\u9fff]")
+_RE_PINYIN = re.compile(r"([a-z]+)([1-5])")
 _init_lock = threading.Lock()
 _ready = False
 _window_cache = OrderedDict()
@@ -130,7 +135,7 @@ def _b2p(bopomofo):
 
 def _wordize_and_map(text):
     words, text2word, word2text = [], [], []
-    for match in re.finditer(r' +|[a-zA-Z0-9]+|[^ ]', text):
+    for match in _RE_WORD.finditer(text):
         word = match.group()
         if word[0] == ' ':
             text2word.extend([None] * len(word))
@@ -152,7 +157,7 @@ def _tokenize_and_map(text):
         else:
             cur = ws
             for t in wt:
-                tlen = len(re.sub(r"^##", "", t))
+                tlen = len(_RE_BERT_PREFIX.sub("", t))
                 token2text.append((cur, cur + tlen))
                 cur += tlen
                 tokens.append(t)
@@ -201,7 +206,7 @@ def _truncate(text, tokens, text2token, token2text, query_id, max_len=512):
 
 def disambiguate(text):
     """复用短文稿推理结果；返回副本，避免调用者污染缓存。"""
-    if not re.search(r"[\u3400-\u9fff]", text):
+    if not _RE_CJK.search(text):
         return [None] * len(text)
     if len(text) <= 2000:
         return list(_cached_disambiguate(text))
@@ -324,7 +329,7 @@ def _pinyin_to_sapi(py):
         return None
     # 暴力清理所有非字母数字字符，仅保留拼音字母和声调数字
     clean = "".join([c for c in py.lower() if c.isalnum()])
-    m = re.fullmatch(r"([a-z]+)([1-5])", clean)
+    m = _RE_PINYIN.fullmatch(clean)
     return f"{m.group(1)} {m.group(2)}" if m else None
 
 

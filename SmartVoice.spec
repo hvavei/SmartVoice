@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 assets = [('models/g2pw', 'models/g2pw'), ('assets', 'assets')]
 for package in ('rapidocr_onnxruntime', 'imageio_ffmpeg'):
-    assets += collect_data_files(package)
+    assets += sorted(collect_data_files(package))
 
 a = Analysis(
     ['main.py'],

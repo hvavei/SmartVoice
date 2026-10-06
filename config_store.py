@@ -9,6 +9,11 @@ Tk 相关的定时器与落盘结果回主线程，由调用方以回调注入�
 """
 from task_manager import DaemonPool
 
+try:
+    from tkinter import TclError
+except ImportError:  # pragma: no cover —— 纯逻辑单测无 Tk 时退化为 Exception
+    TclError = Exception
+
 DEBOUNCE_MS = 350
 
 
@@ -26,14 +31,20 @@ class ConfigStore:
         """暂存新配置并去抖；频繁输入只落最后一次。到点后调 callback（App 侧做计数与唤醒）。"""
         self.pending = cfg
         if self._after is not None:
-            self._cancel_fn(self._after)
+            try:
+                self._cancel_fn(self._after)
+            except TclError:
+                pass  # 销毁中的 root：定时器随窗口一起没了，无需取消。
         self._after = self._schedule_fn(DEBOUNCE_MS, callback)
 
     def flush(self):
         """取消去抖定时，取出暂存并送后台落盘，返回 Future（调用方有界等待）；无暂存返回 None。
         不做计数与唤醒，由调用方负责。"""
         if self._after is not None:
-            self._cancel_fn(self._after)
+            try:
+                self._cancel_fn(self._after)
+            except TclError:
+                pass
             self._after = None
         if self.pending is None:
             return
@@ -41,12 +52,21 @@ class ConfigStore:
         save_fn, report_fn = self._save_fn, self._report_fn
 
         def write():
-            error = None
             try:
                 save_fn(cfg)
-            except Exception as e:  # noqa: BLE001 —— 落盘失败记诊断，不炸后台线程
-                error = str(e)
-            report_fn("config_done", error)
+            except (KeyboardInterrupt, SystemExit) as e:
+                # 先记名再抛：调用方同时看 report 事件与 Future，不许静默“成功”。
+                report_fn("config_done", type(e).__name__)
+                raise
+            except BaseException as e:  # noqa: BLE001 —— 落盘失败记诊断，不炸后台线程
+                if isinstance(e, Exception):
+                    report_fn("config_done", str(e))
+                    return
+                # 中断类异常（旧 except Exception 兜不住）：记类型名再原样抛出，
+                # 不冒充“落盘成功”。
+                report_fn("config_done", type(e).__name__)
+                raise
+            report_fn("config_done", None)
 
         return self.pool.submit(write)
 
@@ -56,6 +76,9 @@ class ConfigStore:
 
     def shutdown(self, wait=True):
         if self._after is not None:
-            self._cancel_fn(self._after)
+            try:
+                self._cancel_fn(self._after)
+            except TclError:
+                pass
             self._after = None
         self.pool.shutdown(wait=wait)

@@ -36,6 +36,8 @@ def _sess():
         s.mount("https://", adapter)
         s.mount("http://", adapter)
         s.headers.update({"User-Agent": f"{appmeta.NAME}/{appmeta.VERSION}"})
+        # 不读系统环境代理：合成流量固定直连公网终结点，防 env 注入劫持/绕路。
+        s.trust_env = False
         _THREAD_SESS.session = s
     return workflow.Session(_THREAD_SESS.session)
 
@@ -140,7 +142,14 @@ def load_json(path, default):
         except OSError:
             pass
         return default
-    except Exception:
+    except FileNotFoundError:
+        return default
+    except (OSError, UnicodeError):
+        # 权限/编码问题同样留现场再回退；缺文件才静默（首次启动无配置文件是常态）。
+        try:
+            os.replace(path, path + ".bak")
+        except OSError:
+            pass
         return default
 
 
@@ -161,7 +170,10 @@ def save_json(path, obj):
         os.replace(tmp, path)
     finally:
         if tmp and os.path.exists(tmp):
-            os.remove(tmp)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass  # 清理失败不许掩盖写入本身的原始异常。
 
 
 def get_voices(region=None):
@@ -357,6 +369,13 @@ def g2p_phoneme_annotator(text):
 
 
 _QUOTE_PATTERN = re.compile(r'(“[^“”]*”|「[^「」]*」|『[^『』]*』|"[^"\n]*")')
+# 行级角色判定热点：逐行编译约 2 倍浪费，模块级预编译。
+_RE_BRACKET_LINE = re.compile(r"^\[.+?\]")
+_RE_NAME_PREFIX = re.compile(r"^([^:：\s]{1,12})[:：]")
+_RE_SLOT_NUM = re.compile(r"\d{1,2}")
+_RE_BRACKET_BODY = re.compile(r"^\[(.+?)\]\s*(.+)$")
+_RE_NAME_BODY = re.compile(r"^([^:：\s]{1,12})[:：]\s*(.+)$")
+_RE_SIGNED_PCT = re.compile(r"^([+-]?)(\d+)%$")
 
 
 def format_dialogue_lines(raw_text, slot_names=None):
@@ -377,10 +396,10 @@ def format_dialogue_lines(raw_text, slot_names=None):
             continue
 
         # 已有明确格式：[角色]台词，或前缀命中槽位名/合法数字槽位(非时间格式)的 行
-        if re.match(r"^\[.+?\]", line):
+        if _RE_BRACKET_LINE.match(line):
             lines.append(line)
             continue
-        m = re.match(r"^([^:：\s]{1,12})[:：]", line)
+        m = _RE_NAME_PREFIX.match(line)
         if m and _role_prefix_hit(m.group(1), line[m.end():], names):
             lines.append(line)
             continue
@@ -408,7 +427,7 @@ def _role_prefix_hit(name, body, names):
     if name in names:
         return True
     rest = body.strip()
-    return bool(re.fullmatch(r"\d{1,2}", name) and names
+    return bool(_RE_SLOT_NUM.fullmatch(name) and names
                 and 1 <= int(name) <= len(names) and not rest[:1].isdigit())
 
 
@@ -628,15 +647,15 @@ def parse_dub_script(text, slot_names):
         if not line:
             continue
         idx, body = None, line
-        m = re.match(r"^\[(.+?)\]\s*(.+)$", line)
+        m = _RE_BRACKET_BODY.match(line)
         if m:
             cand, rest = m.group(1).strip(), m.group(2).strip()
             if cand in names:
                 idx, body = names.index(cand), rest
-            elif re.fullmatch(r"\d{1,2}", cand) and 1 <= int(cand) <= len(names):
+            elif _RE_SLOT_NUM.fullmatch(cand) and 1 <= int(cand) <= len(names):
                 idx, body = int(cand) - 1, rest
         else:
-            m = re.match(r"^([^:：\s]{1,12})[:：]\s*(.+)$", line)
+            m = _RE_NAME_BODY.match(line)
             if m and _role_prefix_hit(m.group(1), m.group(2), names):
                 cand = m.group(1)
                 idx = names.index(cand) if cand in names else int(cand) - 1
@@ -765,7 +784,7 @@ def openai_speech_url(endpoint):
 def openai_rate_to_speed(rate):
     """界面语速百分比 -> OpenAI speed 0.25~4.0, 100%=1.0."""
     t = (rate or "100%").strip()
-    m = re.match(r"^([+-]?)(\d+)%$", t)
+    m = _RE_SIGNED_PCT.match(t)
     if not m:
         return 1.0
     sign, num = m.group(1), int(m.group(2))

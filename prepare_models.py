@@ -72,13 +72,14 @@ def prepare():
                         if received > cap:
                             raise ValueError('资产超出预期大小，中止下载')
                         out.write(block)
+            # replace 同样可能被杀软锁住失败：纳入 try，同样清理 .part 不留残留。
+            part.replace(path)
         except Exception:
             try:
                 part.unlink(missing_ok=True)
             except OSError:
                 pass
             raise
-        part.replace(path)
         sources[path.name] = url
 
     if any(check_asset(target, n) is not None for n in ZIP_MEMBERS):
@@ -115,12 +116,13 @@ def prepare():
                  5 * 1024**2)
     validate_assets(target)
     manifest = {}
-    for path in target.iterdir():
-        if path.is_file() and path.name != 'manifest.json' and not path.name.endswith('.part'):
-            with path.open('rb') as f:
-                digest = hashlib.file_digest(f, 'sha256').hexdigest()
-            manifest[path.name] = {'sha256': digest, 'bytes': path.stat().st_size,
-                                   'source': sources.get(path.name, 'G2PWModel-v2-onnx.zip')}
+    # 只收录 REQUIRED 资产：杂散文件（__pycache__/DS_Store/残留 .part）不许冒充资产进清单。
+    for name in REQUIRED:
+        path = target / name
+        with path.open('rb') as f:
+            digest = hashlib.file_digest(f, 'sha256').hexdigest()
+        manifest[name] = {'sha256': digest, 'bytes': path.stat().st_size,
+                          'source': sources.get(name, 'G2PWModel-v2-onnx.zip')}
     manifest_path = target / 'manifest.json'
     manifest_tmp = manifest_path.with_name(manifest_path.name + '.part')
     manifest_tmp.write_text(json.dumps(manifest, indent=2), encoding='utf-8')

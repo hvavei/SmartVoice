@@ -15,6 +15,7 @@ def open_export_settings(app):
     top = tk.Toplevel(app.root)
     app._export_win = top
     top.title('SmartVoice · 导出设置')
+    top.transient(app.root)
     top.configure(bg=theme.BG)
     for row, (label, var) in enumerate((('输出目录', app.export_dir), ('文件名', app.export_name),
                                        ('开头留白(ms)', app.leading_ms), ('结尾留白(ms)', app.trailing_ms))):
@@ -49,7 +50,13 @@ def open_export_settings(app):
             app._apply_export_options(opened)
         top.destroy()
     top.protocol('WM_DELETE_WINDOW', dismiss)
+    top._sv_dismiss = dismiss  # 主题切换走同一出口：非法值恢复进入时状态，不残留脏 Var。
+    top.bind('<Escape>', lambda e: dismiss())
     ttk.Button(top, text='保存', command=save).grid(row=7, column=1, pady=8)
+    try:
+        top.winfo_children()[1].focus_set()
+    except (tk.TclError, IndexError):
+        pass
 
 
 def open_component_manager(app):
@@ -61,6 +68,7 @@ def open_component_manager(app):
     top = tk.Toplevel(app.root)
     app._component_win = top
     top.title('SmartVoice · 增强组件')
+    top.transient(app.root)
     top.geometry('650x300')
     top.resizable(False, False)
     top.configure(bg=theme.BG)
@@ -149,4 +157,6 @@ def open_component_manager(app):
         else:
             top.destroy()
     top.protocol('WM_DELETE_WINDOW', close)
+    top._sv_close = close  # 主题切换走同一出口：下载中先取消不断孤儿线程。
+    top.bind('<Escape>', lambda e: close())
     poll()

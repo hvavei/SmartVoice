@@ -104,8 +104,13 @@ def run_jobs(ctx, seq, jobs, snap):
                 index = pending.pop(future)
                 try:
                     results[index] = future.result()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 取消收割期刚好完成的真失败：不抛（任务已取消），但记诊断，不静默。
+                    if snap.get('_diag'):
+                        try:
+                            snap['_diag'].event('segment_failed', error_type=type(e).__name__)
+                        except Exception:
+                            pass
     finally:
         halted.set()
         for future in pending:

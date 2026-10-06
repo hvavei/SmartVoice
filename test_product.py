@@ -590,11 +590,18 @@ class ProductGuiTests(unittest.TestCase):
 
     def test_pause_and_resume_commands(self):
         player = self.a.player
-        with patch.object(player, '_cmd', side_effect=['playing', '', 'paused', '']) as cmd:
-            player.toggle_pause()
-            player.toggle_pause()
-        self.assertEqual([c.args[0] for c in cmd.call_args_list],
-                         ['status ttsstudio mode', 'pause ttsstudio', 'status ttsstudio mode', 'resume ttsstudio'])
+        player.opened = True
+        try:
+            with patch.object(player, '_cmd', side_effect=['playing', '', 'paused', '']) as cmd:
+                player.toggle_pause()
+                player.toggle_pause()
+            self.assertEqual([c.args[0] for c in cmd.call_args_list],
+                             ['status ttsstudio mode', 'pause ttsstudio', 'status ttsstudio mode', 'resume ttsstudio'])
+            with patch.object(player, '_cmd', side_effect=['stopped']) as cmd:
+                player.toggle_pause()  # stopped 态不再发 pause 弹 MCI 错误
+            self.assertEqual([c.args[0] for c in cmd.call_args_list], ['status ttsstudio mode'])
+        finally:
+            player.opened = False
 
     def test_wav_export_uses_pcm_and_unique_path(self):
         a = self.a

@@ -40,6 +40,16 @@ def build_dubpanel(app, dub_box, IX, IY):
         scrollregion=app.dub_canvas.bbox("all")))
     app.dub_canvas.bind("<Configure>", lambda e: app.dub_canvas.itemconfigure(
         app._dub_window, width=e.width))
+
+    def _wheel(e):
+        try:
+            app.dub_canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        except tk.TclError:
+            pass
+        return 'break'
+    # 卡片内的 Combobox/按钮保留原生滚轮行为，只在画布/卡片空白处滚动。
+    app.dub_canvas.bind('<MouseWheel>', _wheel)
+    app.dub_body.bind('<MouseWheel>', _wheel)
     app._dub["slots"] = []
     # 多人配音下拉人声：只展示 性别 + 代号 (如: 女 zh-CN-XiaoxiaoNeural)
     slot_items = []
@@ -104,6 +114,7 @@ def build_dubpanel(app, dub_box, IX, IY):
         name_v.trace_add("write", lambda *a: app._save_cfg())
         cb_voice.bind("<<ComboboxSelected>>", lambda e: app._save_cfg())
         app._dub["slots"].append({"on": on_v, "name": name_v, "combo": cb_voice, "update_color": _update_color})
+        card.bind('<MouseWheel>', _wheel)
     # 槽位紧凑纵向排列，右侧固定宽度且不会因窗口变窄被挤掉。
     for i, child in enumerate(app.dub_body.winfo_children()):
         child.grid(row=i, column=0, sticky="ew", pady=1)

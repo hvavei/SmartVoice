@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -174,6 +175,15 @@ class Session:
         start = time.monotonic()
         try:
             response = getattr(self.session, method)(*args, **kwargs)
+        except BaseException as e:
+            # BaseException（取消/中断）同样记诊断再原样抛出：旧 except Exception
+            # 兜不住它们，之前是裸穿透、无 network_error 事件。
+            if diagnostics:
+                try:
+                    diagnostics.event('network_error', index, error_type=type(e).__name__)
+                except Exception:
+                    pass
+            raise
         except Exception as e:
             if diagnostics:
                 diagnostics.event('network_error', index, error_type=type(e).__name__)
@@ -214,11 +224,21 @@ class SegmentCache:
 
     def load(self, key):
         try:
-            data = (self.root / f'{key}.audio').read_bytes()
-            meta = storage.read_json(self.root / f'{key}.json')
+            audio_path = self.root / f'{key}.audio'
+            json_path = self.root / f'{key}.json'
+            data = audio_path.read_bytes()
+            meta = storage.read_json(json_path)
             if not isinstance(meta, dict):
                 return None
-            return data if data and meta.get('sha256') == hashlib.sha256(data).hexdigest() else None
+            if not (data and meta.get('sha256') == hashlib.sha256(data).hexdigest()):
+                return None
+            # 命中即刷新 mtime：淘汰看“最久未用”而不是“最久写入”，热段不被误删。
+            try:
+                os.utime(audio_path, None)
+                os.utime(json_path, None)
+            except OSError:
+                pass
+            return data
         except OSError:
             return None
 

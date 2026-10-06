@@ -42,5 +42,6 @@ def build_voicepanel(app, voice_box, IX, IY):
     app.tree.bind("<Configure>", app._resize_voice_columns)
     app.tree.bind("<<TreeviewSelect>>", app._on_tree_select)
     app.tree.bind("<Double-1>", app._on_tree_audition)
+    app.tree.bind("<Return>", app._on_tree_audition)  # 键盘用户：方向键选中 + 回车试听。
     app.tree.bind('<Button-1>', app._block_column_resize, add='+')
     app.tree.bind('<B1-Motion>', app._block_column_resize, add='+')

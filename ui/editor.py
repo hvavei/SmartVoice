@@ -35,4 +35,4 @@ def build_editor(app, f4, IX, IY):
     app.play_time = ttk.Label(app.editor_info, text='00:00 / 00:00', foreground=theme.FEEDBACK)
     app.play_time.pack(side='left', padx=(12, 0))
     app._bind_editor(app.text)
-    app.text.bind('<Double-Button-1>', app._open_editor_double_click)
+    app.text.bind('<Triple-Button-1>', app._open_editor_by_gesture)

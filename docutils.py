@@ -15,9 +15,16 @@ def extract_pdf_text(path, ocr=False):
     import pypdf
     import storage
     path = storage.long_path(path)
-    reader = pypdf.PdfReader(path)
     try:
-        pages = list(reader.pages)
+        reader = pypdf.PdfReader(path)
+    except Exception as e:
+        # 重命名 txt / 加密 / 截断文件：原始异常穿透只剩堆栈，转用户可读错。
+        raise ValueError('PDF 已损坏或已加密，请另存后导入') from e
+    try:
+        try:
+            pages = list(reader.pages)
+        except Exception as e:
+            raise ValueError('PDF 已损坏或已加密，请另存后导入') from e
         pages_text = [""] * len(pages)
         needs_ocr = []
         for i, page in enumerate(pages):
@@ -39,8 +46,8 @@ def extract_pdf_text(path, ocr=False):
     if ocr and needs_ocr:
         try:
             ocr_map = _ocr_pages(path, needs_ocr)
-        except (RuntimeError, ImportError, OSError) as e:
-            # 缺组件/模型损坏/依赖缺失：已有文本页照常返回，不整篇作废；全空才明确报错。
+        except Exception as e:
+            # 组件缺失/模型损坏/依赖异常：已有文本页照常返回，不整篇作废；全空才明确报错。
             if all(not text for text in pages_text):
                 raise RuntimeError(f'OCR 不可用（{e}），扫描页无法导入') from e
             ocr_map = {}
@@ -71,8 +78,10 @@ def _ocr_pages(path, page_indices):
                         bitmap.close()
                 finally:
                     page.close()
-            except Exception as exc:
-                raise RuntimeError(f'PDF 第 {idx + 1} 页 OCR 失败，导入未完成') from exc
+            except Exception:
+                # 单页失败只丢这一页：旧逻辑直接 raise，已 OCR 好的页跟着全作废；
+                # 全空的兜底由调用方统一报错，这里只收部分成果。
+                continue
     return result
 
 

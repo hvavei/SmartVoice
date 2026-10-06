@@ -88,7 +88,12 @@ class MciPlayer:
         return now - self._ended_since < 0.3
 
     def toggle_pause(self):
+        if not self.opened:
+            return
+        # stopped 态发 pause 会弹 MCI 错误：只在 playing/paused 才发指令。
         mode = self._cmd(f'status {self.alias} mode').lower()
+        if mode not in ("playing", "paused"):
+            return
         self._cmd(f'{"resume" if mode == "paused" else "pause"} {self.alias}')
 
     def position_ms(self):

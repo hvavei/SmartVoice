@@ -141,6 +141,9 @@ def protect_settings(cfg):
 def unlock_settings(cfg):
     cfg = copy.deepcopy(cfg)
     vault = read_json(DATA_DIR / 'credentials.json')
+    # credentials.json 被手改成非 dict：直接视空，不让 vault[ref] 抛 TypeError 穿透。
+    if not isinstance(vault, dict):
+        vault = {}
     for kind, profile in cfg.get('engine_profiles', {}).items():
         ref = profile.get('credential_ref')
         if ref and ref in vault:
@@ -243,4 +246,7 @@ def unique_export(directory, name, extension, data):
         raise RuntimeError('同名输出过多，请更改文件名')
     finally:
         if tmp is not None:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass  # 清理失败不许掩盖导出本身的原始异常。

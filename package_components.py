@@ -2,9 +2,11 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
+import time
 import zipfile
 
 import appmeta
@@ -84,11 +86,19 @@ def package(full, work, release):
         filename = f'{name}-{appmeta.VERSION}-{ABI}.zip'
         archive_path = release / filename
         unpacked = 0
-        with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=ZIP_COMPRESSLEVEL) as z:
-            for path in sorted(payload.rglob('*')):
-                if path.is_file():
-                    unpacked += path.stat().st_size
-                    z.write(path, path.relative_to(payload).as_posix())
+        # 确定性打包：固定 ZipInfo 时间戳/权限/排序，同源码两次构建 sha256 一致；
+        # 未设 SOURCE_DATE_EPOCH 时用 0（1980-01-01），只影响包内元数据。
+        stamp = time.gmtime(int(os.environ.get('SOURCE_DATE_EPOCH', '0') or 0))[:6]
+        with zipfile.ZipFile(archive_path, 'w') as z:
+            names = sorted(p.relative_to(payload).as_posix()
+                           for p in payload.rglob('*') if p.is_file())
+            for arc in names:
+                path = payload / arc
+                unpacked += path.stat().st_size
+                info = zipfile.ZipInfo(arc, date_time=stamp)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                z.writestr(info, path.read_bytes(), compresslevel=ZIP_COMPRESSLEVEL)
         with archive_path.open('rb') as f:
             digest = hashlib.file_digest(f, 'sha256').hexdigest()
         result['components'][name] = dict(manifest, sha256=digest, bytes=archive_path.stat().st_size,

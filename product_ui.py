@@ -43,10 +43,26 @@ class PeerText(tk.Text):
         self._setup(parent, {})
         self._tclCommands = []
         source.tk.call(source._w, 'peer', 'create', self._w, '-undo', True, '-wrap', 'word',
+                       '-maxundo', 5000, '-autoseparators', True,
                        '-font', source.cget('font'), '-padx', 10, '-pady', 8)
 
 
 class ProductUI:
+    def _clamp_wh(self, w, h, margin=80):
+        """初始几何钳位到屏幕：高 DPI 下物理放大后底部工具条不被裁掉。
+        不声明 DPI 感知（无多 DPI 测试机，不动渲染行为），只防裁剪。"""
+        try:
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            return max(480, min(w, sw - margin)), max(480, min(h, sh - margin))
+        except tk.TclError:
+            return w, h
+
+    def _clamp_minh(self, h, margin=80):
+        try:
+            return max(480, min(h, self.root.winfo_screenheight() - margin))
+        except tk.TclError:
+            return h
+
     def _init_product(self, cfg):
         self._active_task = False
         self._stopping = False
@@ -225,7 +241,9 @@ class ProductUI:
             return
         top = tk.Toplevel(self.root)
         top.title('SmartVoice · 文本编辑')
-        top.geometry('900x650')
+        top.transient(self.root)
+        w, h = self._clamp_wh(900, 650)
+        top.geometry(f'{w}x{h}')
         top.configure(bg=BG)
         self._editor_window = top
         peer = PeerText(top, self.text)
@@ -235,6 +253,8 @@ class ProductUI:
         peer.pack(fill='both', expand=True)
         self._bind_editor(peer)
         self._bind_text_context_menu(peer, editor=True)
+        top.protocol('WM_DELETE_WINDOW', top.destroy)
+        peer.bind('<Escape>', lambda e: top.destroy())
         peer.focus_set()
 
     def _project_payload(self):
@@ -421,6 +441,8 @@ class ProductUI:
     def toggle_pause(self):
         if self.player.opened:
             self.player.toggle_pause()
+        else:
+            self.status.config(text='当前没有播放，无需暂停')
 
     def replay(self):
         if self._active_task:
@@ -441,8 +463,12 @@ class ProductUI:
 
     def copy_diagnostics(self):
         data = self._diag.snapshot() if self._diag else {'software': appmeta.NAME, 'version': appmeta.VERSION, 'state': '尚无合成任务'}
-        self.root.clipboard_clear()
-        self.root.clipboard_append(json.dumps(data, ensure_ascii=False, indent=2))
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(json.dumps(data, ensure_ascii=False, indent=2))
+        except tk.TclError:
+            self.status.config(text='剪贴板被占用，复制失败')
+            return
         self.status.config(text='已复制脱敏诊断（不含Key、Token、原文或音频）')
 
     def export_diagnostics(self):

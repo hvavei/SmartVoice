@@ -33,6 +33,7 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\SmartVoice.exe
 CloseApplications=yes
 RestartApplications=no
+AppMutex=SmartVoiceServerMutex
 SetupLogging=yes
 CreateUninstallRegKey=yes
 

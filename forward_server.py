@@ -1,16 +1,19 @@
 """转发服务(MultiTTS式): GET /voices 查人声, GET/POST /forward 合成语音."""
 import json
 import threading
+import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import appmeta
+from task_manager import DaemonPool
 
 MAX_BODY = 1 << 20   # POST 请求体上限 1MB，防无上限读内存
 MAX_TEXT = 100_000   # 单次合成文本上限
 MAX_WORKERS = 8      # 并发合成上限，超出排队
 MAX_QUEUED = 16      # 排队上限，再多直接 503（防 Slowloris 耗尽线程）
+MAX_URL = 32 * 1024        # GET 整行上限：基类 64K 才拦 414，32K 以上直接 JSON 413
+MAX_HEADERS = 64 * 1024     # 请求头总量上限，防超大 header 吃内存
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -25,7 +28,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
 
     def _json(self, obj, code=200):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        try:
+            body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError):
+            # voices_fn 返回不可序列化对象：回 502 而不是断连无响应。
+            code, body = 502, b'{"error":"unserializable"}'
         try:
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -58,19 +65,33 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"error": "voice and rate must be strings"}, 400)
         try:
             data = self.synth_fn(text, voice, rate)
-        except Exception as e:
-            return self._json({"error": str(e)[:300]}, 502)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as e:
+            # 工作线程内转 502：不断连，服务继续活；只报类型名，
+            # 引擎错误串可能含内网地址，--cors 打开后不许被任意网页读走。
+            return self._json({"error": type(e).__name__}, 502)
         return self._audio(data)
 
+    def _headers_too_big(self):
+        try:
+            return sum(len(k) + len(v) for k, v in self.headers.items()) > MAX_HEADERS
+        except Exception:
+            return True
+
     def do_GET(self):
+        if len(self.path) > MAX_URL or self._headers_too_big():
+            return self._json({"error": "request too large"}, 413)
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         if u.path == "/voices":
             # voices_fn 可能触发联网拉人声：失败回 502 JSON，而不是断连无响应
             try:
                 return self._json(self.voices_fn())
-            except Exception as e:
-                return self._json({"error": str(e)[:300]}, 502)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as e:
+                return self._json({"error": type(e).__name__}, 502)
         if u.path == "/forward":
             return self._forward(q.get("text", [""])[0],
                                  q.get("voice", [""])[0] or None,
@@ -82,6 +103,12 @@ class _Handler(BaseHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if self._headers_too_big():
+            return self._json({"error": "request too large"}, 413)
+        if self.headers.get("Transfer-Encoding"):
+            # 不支持 chunked：无 Content-Length 时旧逻辑把真 body 当空报 400，
+            # 残留数据靠关连接蒙混；语义错了就直说 501。
+            return self._json({"error": "chunked unsupported"}, 501)
         u = urllib.parse.urlparse(self.path)
         if u.path != "/forward":
             return self._json({"error": "not found"}, 404)
@@ -137,8 +164,9 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, *args, max_workers=MAX_WORKERS, queue_size=MAX_QUEUED, **kwargs):
         super().__init__(*args, **kwargs)
-        self._pool = ThreadPoolExecutor(max_workers=max_workers,
-                                        thread_name_prefix="forward")
+        # DaemonPool：退出时不被池里空闲长连接线程钉死（原生池线程非 daemon）。
+        self._pool = DaemonPool(max_workers=max_workers,
+                                thread_name_prefix="forward")
         self._slots = threading.Semaphore(max_workers + queue_size)
 
     def process_request(self, request, client_address):
@@ -168,11 +196,15 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
 
 def _reject_overloaded(request):
-    """排空请求头(+已声明 body)再回 503：残留未读数据会让 Windows 发 RST 吞掉状态码。"""
+    """排空请求头(+已声明 body)再回 503：残留未读数据会让 Windows 发 RST 吞掉状态码。
+    整段排空设总时限：Slowloris 式 1 字节/2s 之前能堵住 acceptor 主线程数小时。"""
+    deadline = time.monotonic() + 3
     try:
         request.settimeout(2)
         data = b""
         while b"\r\n\r\n" not in data and len(data) < 65536:
+            if time.monotonic() > deadline:
+                break
             chunk = request.recv(4096)
             if not chunk:
                 break
@@ -188,6 +220,8 @@ def _reject_overloaded(request):
                 break
         length = min(length, MAX_BODY)
         while len(rest) < length:
+            if time.monotonic() > deadline:
+                break
             chunk = request.recv(min(65536, length - len(rest)))
             if not chunk:
                 break

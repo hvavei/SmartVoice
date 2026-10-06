@@ -88,6 +88,15 @@ def main():
     assert (user / 'exports' / 'keep.txt').is_file()
     assert not (app / 'SmartVoice.exe').exists()
     assert not (app / '_internal').exists(), 'uninstall left _internal'
+    # 注册表残留：CreateUninstallRegKey=yes 写 HKCU，卸载必须清掉自己的键。
+    import winreg
+    _uninstall_key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{641F85CB-34CC-42EF-A038-6635FC6EA090}_is1"
+    try:
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, _uninstall_key)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError('uninstall left registry key')
     import re
     safe_workdir = re.sub(r'Users\\[^\\]+', r'Users\\<user>', str(work))
     print(json.dumps({'ok': True, 'workdir': safe_workdir, 'checks': checks['checks'],

@@ -7,12 +7,18 @@
 - Tk 的 after/after_cancel 由调用方注入；TclError 仅用于守卫销毁中的 root。
 """
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import thread as _executor_thread
+
+if sys.version_info < (3, 14):
+    # DaemonPool 钉死 3.14 私有线程 API：低版本 import 即 AttributeError，
+    # 后台全起不来；早报错、不装糊涂。
+    raise RuntimeError("SmartVoice 源码运行需要 Python 3.14")
 
 POLL_INTERVAL_MS = 50
 POLL_BATCH = 100

@@ -7,6 +7,9 @@ import appmeta
 
 from appmeta import VERSION
 
+# 转发服务互斥量句柄：进程级持有，installer.iss AppMutex 靠它发现运行中的服务。
+_SERVER_MUTEX = None
+
 
 def installation_check(report_path):
     """安装后离线验收，可在无控制台 EXE 中输出 JSON 结果；不读取 Key 或联网。"""
@@ -316,19 +319,29 @@ def main():
         ap.error('--cors/--port 需要与 --server 联用')
     if args.install_component:
         import components
+        from pathlib import Path as _Path
         name, archive = args.install_component
         if name not in components.NAMES:
             ap.error('Unknown component')
+        if not _Path(archive).is_file():
+            ap.error('component archive not found')
         try:
             components.install_archive(name, archive)
         except Exception as e:
-            raise SystemExit(f'组件安装失败: {e}')
+            import re
+            # 路径脱敏：原始异常常带 C:\Users\<user>\...，不对控制台原文输出。
+            msg = re.sub(r'[A-Za-z]:\\[^"\s]*', '<path>', str(e))
+            raise SystemExit(f'组件安装失败({type(e).__name__}): {msg[:300]}')
         return
     if args.version:
         print(VERSION)
         return
     if args.smoke_test:
-        return smoke_test()
+        try:
+            return smoke_test()
+        except AssertionError as e:
+            # 裸 assert 堆栈含 _internal 绝对路径：转干净退出码+一行原因。
+            raise SystemExit(f'smoke 失败: {e}')
     if args.installation_check:
         return installation_check(args.installation_check)
     if args.server:
@@ -384,8 +397,22 @@ def main():
                 voice = table.get(person) or (person if person in table.values() else voice)
             except Exception:
                 pass  # 解析失败回退默认人声，转发服务仍可用
+        print(f'转发服务启动 127.0.0.1:{port}（配置为启动时快照：改 Key/人声/端口后需重启 --server 生效）')
+        global _SERVER_MUTEX
+        try:
+            from ctypes import WinDLL, c_void_p, c_int, c_wchar_p
+            _k32 = WinDLL('kernel32', use_last_error=True)
+            _k32.CreateMutexW.restype = c_void_p
+            _k32.CreateMutexW.argtypes = [c_void_p, c_int, c_wchar_p]
+            # 安装互斥（installer.iss AppMutex 同名）：运行中安装会先提示，不静默杀进程。
+            # 只建不判：同进程重复建（单测）与双实例都由端口占用报错兜底，这里不抢戏。
+            _SERVER_MUTEX = _k32.CreateMutexW(None, 0, "SmartVoiceServerMutex")
+        except Exception:
+            pass  # 非 Windows/精简环境：无互斥量也可跑，不阻断服务
         try:
             forward_server.run_server(port, synth, vlist, cors=args.cors)
+        except KeyboardInterrupt:
+            return 0  # 前台 Ctrl+C 是正常退出，不是 130 堆栈。
         except OSError as e:
             raise SystemExit(f"端口 {port} 启动失败: {e}")
         return

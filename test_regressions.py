@@ -1622,7 +1622,8 @@ class DeepRegressionTests(unittest.TestCase):
             resp = conn.getresponse()
             self.assertEqual(resp.status, 502)                # 失败回结构化 502，而不是断连无响应
             body = json.loads(resp.read().decode('utf-8'))
-            self.assertIn('拉取人声失败', body['error'])
+            # 只报类型名：引擎错误串可能含内网地址，--cors 打开后不许被任意网页读走。
+            self.assertEqual(body['error'], 'RuntimeError')
             conn.close()
         finally:
             srv.shutdown()
@@ -2497,6 +2498,232 @@ class ProgressModelTests(unittest.TestCase):
         model = self._model()
         model.finish()
         self.assertIsNone(model.render())
+
+
+class SweepRegressionTests(unittest.TestCase):
+    """本轮通筛的守护测试：字幕解析补漏、导出校验统一、转发加固、取消诊断、缓存触碰。"""
+
+    def _doc(self, name, data, binary=False):
+        import documents
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / name
+            if binary:
+                path.write_bytes(data)
+            else:
+                path.write_text(data, encoding='utf-8')
+            return documents.read_document(path)
+
+    def test_srt_ass_override_stripped(self):
+        text = self._doc('a.srt', '1\n00:00:01,000 --> 00:00:02,000\n{\\an8}顶部台词\n')
+        self.assertIn('顶部台词', text)
+        self.assertNotIn('{', text)
+
+    def test_srt_short_timestamp_dropped(self):
+        text = self._doc('a.srt', 'WEBVTT\n\n00:01.000 --> 00:02.000\n短时间戳行\n\n正常台词\n')
+        self.assertNotIn('00:01.000', text)
+        self.assertIn('正常台词', text)
+
+    def test_lrc_mid_tag_not_glued(self):
+        text = self._doc('a.lrc', '[00:12.00]Hello[00:15.00]World\n')
+        self.assertIn('Hello World', text)
+
+    def test_vtt_header_and_note_dropped(self):
+        text = self._doc('a.vtt', 'WEBVTT\n\nNOTE 注释\n\n00:00.000 --> 00:01.000\n<v 阿云>你好\n')
+        self.assertNotIn('WEBVTT', text)
+        self.assertNotIn('NOTE', text)
+        self.assertIn('你好', text)
+
+    def test_ass_dialogue_extracted(self):
+        body = ('[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
+                'Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\\an8}对白一\n'
+                'Style: Default,Arial,20\n')
+        text = self._doc('a.ass', body)
+        self.assertIn('对白一', text)
+        self.assertNotIn('Dialogue', text)
+        self.assertNotIn('Style:', text)
+
+    def test_docx_deleted_revision_skipped(self):
+        import zipfile
+        ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        xml = (f'<w:document xmlns:w="{ns}"><w:body><w:p><w:r><w:t>保留</w:t></w:r>'
+               f'<w:del><w:r><w:t>删除线</w:t></w:r></w:del>'
+               f'<w:ins><w:r><w:t>新增</w:t></w:r></w:ins></w:p></w:body></w:document>')
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'a.docx'
+            with zipfile.ZipFile(path, 'w') as z:
+                z.writestr('word/document.xml', xml)
+            import documents
+            text = documents.read_document(path)
+        self.assertIn('保留', text)
+        self.assertIn('新增', text)
+        self.assertNotIn('删除线', text)
+
+    def test_utf16le_cjk_no_bom_decoded(self):
+        import documents
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'a.txt'
+            path.write_bytes(('中文无BOM测试文本' * 20).encode('utf-16-le'))
+            self.assertIn('中文无BOM', documents.read_text(path))
+
+    def test_validate_export_options_unified(self):
+        from export_options import validate_export_options
+        with self.assertRaises(ValueError):
+            validate_export_options('   ', '配音', 'mp3', 350, 450, False)
+        self.assertFalse(validate_export_options('d', '配音', 'mp3', 350, 450, 'false')['normalize'])
+        self.assertTrue(validate_export_options('d', '配音', 'mp3', 350, 450, True)['normalize'])
+
+    def test_forward_guards_url_chunked_serialization_and_error_shape(self):
+        import http.client
+        import socket
+        import threading
+        import json as jsonlib
+        import forward_server
+        prev_synth, prev_voices = forward_server._Handler.synth_fn, forward_server._Handler.voices_fn
+        forward_server._Handler.synth_fn = staticmethod(
+            lambda t, v, r: (_ for _ in ()).throw(RuntimeError('endpoint=https://secret-host:1/x')))
+        forward_server._Handler.voices_fn = staticmethod(lambda: [{'bad': object()}])
+        srv = forward_server.BoundedThreadingHTTPServer(
+            ('127.0.0.1', 0), forward_server._Handler, max_workers=2, queue_size=2)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+        try:
+            with socket.create_connection(('127.0.0.1', port), 5) as sock:
+                sock.sendall(f'GET /{"a" * (forward_server.MAX_URL + 1)} HTTP/1.1\r\nHost: t\r\n\r\n'.encode())
+                self.assertIn(b'413', sock.recv(4096))  # 超长 URL：parse_qs 之前就拒
+            with socket.create_connection(('127.0.0.1', port), 5) as sock:
+                sock.sendall(b'POST /forward HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n')
+                self.assertIn(b'501', sock.recv(4096))  # chunked 明确不支持，不装 400
+            conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+            conn.request('GET', '/voices')
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 502)  # 不可序列化不回空响应
+            conn.close()
+            conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+            conn.request('POST', '/forward', body=jsonlib.dumps({'text': '你好'}),
+                         headers={'Content-Type': 'application/json'})
+            resp = conn.getresponse()
+            body = resp.read().decode('utf-8')
+            self.assertEqual(resp.status, 502)
+            self.assertNotIn('secret-host', body)  # 只报类型名，不泄引擎错误串
+            self.assertIn('RuntimeError', body)
+            conn.close()
+        finally:
+            forward_server._Handler.synth_fn, forward_server._Handler.voices_fn = prev_synth, prev_voices
+            srv.shutdown()
+            srv.server_close()
+
+    def test_session_baseexception_records_diagnostic(self):
+        import voice_tasks as workflow
+        events = []
+        diag = type('D', (), {'event': lambda self, *a, **k: events.append((a, k))})()
+        token = workflow.Cancellation()
+        class Boom:
+            def post(self, *a, **k):
+                raise KeyboardInterrupt()
+        with workflow.network_context(token, diag, 3):
+            with self.assertRaises(KeyboardInterrupt):
+                workflow.Session(Boom()).post('https://example.com')
+        self.assertTrue(any(a[0] == 'network_error' and k.get('error_type') == 'KeyboardInterrupt'
+                            for a, k in events))
+
+    def test_segment_cache_load_touches_mtime(self):
+        import os
+        import voice_tasks as workflow
+        with tempfile.TemporaryDirectory() as td:
+            cache = workflow.SegmentCache(Path(td))
+            key = 'k' * 64
+            cache.save(key, b'AUDIO')
+            old = 1000000000.0
+            os.utime(Path(td) / f'{key}.audio', (old, old))
+            os.utime(Path(td) / f'{key}.json', (old, old))
+            self.assertEqual(cache.load(key), b'AUDIO')
+            self.assertGreater((Path(td) / f'{key}.audio').stat().st_mtime, old)
+
+    def test_toggle_pause_ignores_stopped_state(self):
+        from studio_gui import MciPlayer
+        p = MciPlayer()
+        p.opened = True
+        with patch.object(p, '_cmd', side_effect=['stopped']) as calls:
+            p.toggle_pause()
+        self.assertEqual(calls.call_count, 1)  # 只查状态，不发 pause 指令
+        with patch.object(p, '_cmd', side_effect=['paused', 'ok']) as calls:
+            p.toggle_pause()
+        self.assertEqual([c.args[0] for c in calls.call_args_list],
+                         ['status ttsstudio mode', 'resume ttsstudio'])
+
+    def test_bounded_server_uses_daemon_pool(self):
+        import forward_server
+        from task_manager import DaemonPool
+        srv = forward_server.BoundedThreadingHTTPServer(
+            ('127.0.0.1', 0), forward_server._Handler, max_workers=1, queue_size=0)
+        try:
+            self.assertIsInstance(srv._pool, DaemonPool)
+        finally:
+            srv.server_close()
+
+    def test_gc_stale_components_removes_orphan_only(self):
+        import components
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / 'g2pw-aaa').mkdir()
+            (root / 'g2pw-bbb').mkdir()
+            (root / 'g2pw-bbb' / 'component.json').write_text('{}', encoding='utf-8')
+            (root / 'g2pw.json').write_text('{"folder": "g2pw-bbb"}', encoding='utf-8')
+            with patch.object(components, 'COMPONENT_DIR', root):
+                components.gc_stale_components()
+            self.assertFalse((root / 'g2pw-aaa').exists())
+            self.assertTrue((root / 'g2pw-bbb').exists())
+
+    def test_download_wraps_network_error(self):
+        import components
+        import requests
+        entry = {'abi': components.ABI, 'sha256': 'x', 'bytes': 10, 'unpacked_bytes': 10,
+                 'url': 'https://github.com/x/y.zip'}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(components, 'COMPONENT_DIR', root), \
+                    patch.object(components, '_entry', return_value=entry), \
+                    patch.object(requests, 'get', side_effect=requests.ConnectionError('dns')):
+                with self.assertRaisesRegex(RuntimeError, 'ConnectionError'):
+                    components.download('ocr')
+
+    def test_branding_preserves_alpha(self):
+        from prepare_branding import _load_square, _save_ico
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('Pillow 未安装')
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / 'src.png'
+            Image.new('RGBA', (300, 300), (0, 0, 0, 0)).save(src)
+            base = _load_square(src)
+            self.assertEqual(base.mode, 'RGBA')
+            out = Path(td) / 'out.ico'
+            _save_ico(out, base)
+            self.assertTrue(out.is_file() and out.stat().st_size > 0)
+
+    def test_config_store_cancel_and_baseexception(self):
+        from tkinter import TclError
+        from config_store import ConfigStore
+        reported = []
+        store = ConfigStore(save_fn=lambda cfg: None,
+                            schedule_fn=lambda ms, cb: 'h',
+                            cancel_fn=lambda h: (_ for _ in ()).throw(TclError('dead')),
+                            report_fn=lambda tag, err: reported.append((tag, err)))
+        store.schedule({}, lambda: None)  # 销毁中取消不抛
+        store.flush()
+        store.shutdown()
+        store2 = ConfigStore(save_fn=lambda cfg: (_ for _ in ()).throw(KeyboardInterrupt()),
+                             schedule_fn=lambda ms, cb: 'h',
+                             cancel_fn=lambda h: None,
+                             report_fn=lambda tag, err: reported.append((tag, err)))
+        store2.pending = {}
+        future = store2.flush()
+        with self.assertRaises(KeyboardInterrupt):
+            future.result(timeout=10)
+        self.assertIn(('config_done', 'KeyboardInterrupt'), reported)
+        store.pool.shutdown(wait=True)
+        store2.pool.shutdown(wait=True)
 
 
 if __name__ == '__main__':
