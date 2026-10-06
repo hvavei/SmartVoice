@@ -6,6 +6,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 
@@ -15,6 +16,18 @@ CACHE_DIR = DATA_DIR / 'cache'
 PROJECT_DIR = DATA_DIR / 'projects'
 EXPORT_DIR = DATA_DIR / 'exports'
 LOG_DIR = DATA_DIR / 'logs'
+
+
+def install_dir():
+    """安装路径：冻结包取 _MEIPASS 的父目录（即 {app}），源码取项目根。"""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS).parent
+    return Path(__file__).resolve().parent
+
+
+def default_export_dir():
+    """默认输出目录跟随安装路径：安装到哪就输出到哪。"""
+    return install_dir() / 'output'
 _vault_lock = threading.Lock()
 
 

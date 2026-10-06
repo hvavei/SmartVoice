@@ -496,7 +496,7 @@ class ProductGuiTests(unittest.TestCase):
         self.assertEqual(a._project_path, path)
         self.assertIsNotNone(a._project_baseline)
         self.assertFalse(a._project_changed())
-        self.assertEqual(a.export_dir.get(), str(storage.EXPORT_DIR))  # 空目录回落默认
+        self.assertEqual(a.export_dir.get(), str(storage.default_export_dir()))  # 空目录回落默认
 
     def test_editor_window_uses_context_menu_instead_of_toolbar(self):
         a = self.a

@@ -37,7 +37,7 @@ from theme import (ACCENT, ACCENT_D, BORDER, FEEDBACK, FG, GREEN, GREY,
                    BG, HEADING, HOVER, MUTED, OUTLINE, PANEL, SEL,
                    TOGGLE_IDLE, TOGGLE_OFF, TOGGLE_ON, TRACK, TROUGH)
 
-OUT_DIR = str(storage.EXPORT_DIR)
+OUT_DIR = str(storage.default_export_dir())
 AUDITION_TEXT = "谁是我们的敌人？谁是我们的朋友？"
 
 # 两套主题(暖白·初/雾蓝) — 颜色统一定义在 theme.py，切换时同步模块并重建界面
@@ -269,6 +269,8 @@ class App(ProductUI):
                     fieldbackground=PANEL, font=self._font(), rowheight=rh, borderwidth=0)
         s.configure("Treeview.Heading", background=HEADING, foreground=FG, font=self._font())
         s.map("Treeview", background=[("selected", SEL)], foreground=[("selected", FG)])
+        # 隐藏列分隔线视觉标识（保留 _block_column_resize 禁止拖拽行为）
+        s.configure("Treeview", separatorwidth=0)
 
     def _load_engine_voices(self):
         kind = engine.kind_of(self.engine_var.get())
@@ -1798,11 +1800,16 @@ class App(ProductUI):
 
     def _refresh_dub_voices(self):
         # 人声表变化后刷新各槽下拉, 格式只显示: 性别 + 代号 (如: 女 zh-CN-XiaoxiaoNeural)
+        # 筛选：按 dub_filter_var 过滤性别
+        filter_gender = getattr(self, 'dub_filter_var', None)
+        filter_val = filter_gender.get() if filter_gender else "全部"
         slot_items = []
         for disp, vid in self.voices.items():
             g = gender_of(disp) or "中"
+            if filter_val != "全部" and g != filter_val:
+                continue
             slot_items.append(f"{g} {vid}")
-        
+
         for s in self._dub.get("slots", []):
             try:
                 cb = s["combo"]

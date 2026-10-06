@@ -25,6 +25,12 @@ def build_dubpanel(app, dub_box, IX, IY):
     head = ttk.Frame(box)
     head.pack(fill="x", padx=IX, pady=IY)
 
+    # 筛选按钮：同人声面板，放在角色分配前面
+    app.dub_filter_var = getattr(app, 'dub_filter_var', tk.StringVar(value="全部"))
+    app.dub_fb = ttk.Combobox(head, textvariable=app.dub_filter_var,
+                              values=["全部", "男", "女"], state="readonly", width=6)
+    app.dub_fb.pack(side="left", padx=2)
+    app.dub_fb.bind("<<ComboboxSelected>>", lambda e: app._refresh_dub_voices())
     app._mkbtn(head, "角色分配", app.on_format_dialogue_lines, width=8).pack(side="left", padx=2)
     app._mkbtn(head, "角色重置", app.reset_roles, width=8).pack(side="left", padx=2)
     scroll = ttk.Frame(box)

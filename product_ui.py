@@ -82,7 +82,7 @@ class ProductUI:
         export = cfg.get('export', {})
         if not isinstance(export, dict):
             export = {}
-        self.export_dir = tk.StringVar(value=str(export.get('directory', str(storage.EXPORT_DIR))))
+        self.export_dir = tk.StringVar(value=str(export.get('directory', str(storage.default_export_dir()))))
         self.export_name = tk.StringVar(value=str(export.get('name', '配音')))
         fmt = str(export.get('format', 'mp3')).lower()
         self.export_format = tk.StringVar(value=fmt if fmt in ('mp3', 'wav') else 'mp3')
@@ -330,7 +330,7 @@ class ProductUI:
             if not isinstance(export, dict):
                 export = {}
             if not str(export.get('directory', '')).strip():
-                export = dict(export, directory=str(storage.EXPORT_DIR))
+                export = dict(export, directory=str(storage.default_export_dir()))
             project['export'] = export
             label = project.get('engine')
             if label not in engine.ENGINE_CHOICES:
