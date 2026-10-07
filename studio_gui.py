@@ -490,7 +490,22 @@ class App(ProductUI):
         """提示是覆盖标签，不写进原稿和撤销栈。"""
         self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 双击打开大窗口编辑',
                                              bg=PANEL, fg=MUTED, font=self._font())
-        self._placeholder_label.bind('<Button-1>', lambda e: (self._placeholder_label.place_forget(), self.text.focus_set()))
+
+        def _placeholder_click(e):
+            # 单击转交 Text：占位符隐藏后第二击才落在同一绑定表上，
+            # 一次双击即可开大窗，不用先单击再双击。
+            try:
+                info = self._placeholder_label.place_info()
+                px, py = int(info.get('x', 12)), int(info.get('y', 8))
+            except (tk.TclError, ValueError):
+                px, py = 12, 8
+            self._placeholder_label.place_forget()
+            self.text.focus_set()
+            try:
+                self.text.event_generate('<Button-1>', x=px + e.x, y=py + e.y)
+            except tk.TclError:
+                pass
+        self._placeholder_label.bind('<Button-1>', _placeholder_click)
         self._placeholder_label.bind('<Double-Button-1>', self._open_editor_double_click)
         self.text.bind('<FocusIn>', lambda e: self._placeholder_label.place_forget())
         self.text.bind('<FocusOut>', lambda e: self._schedule_editor_info())
