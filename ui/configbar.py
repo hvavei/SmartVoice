@@ -21,7 +21,9 @@ def build_configbar(app, f1, IX, IY):
     app._toggle(f1, app.show_var, "显示", app._apply_show).grid(row=0, column=4, padx=IX, sticky="w")
     ttk.Frame(f1).grid(row=0, column=5, sticky="ew")
     zoom_box = ttk.Frame(f1)
-    zoom_box.grid(row=0, column=6, columnspan=2, padx=(IX, IX), sticky="e")
+    # 缩放区整体左移：sticky="w" 锚定空档列左侧（紧随显示开关），
+    # 不再钉在窗口右缘；col5 minsize 保证最小宽度下仍有间距且完全显示。
+    zoom_box.grid(row=0, column=6, columnspan=2, padx=(IX, IX), sticky="w")
     app.lab_zoom = ttk.Label(zoom_box, text="界面缩放:")
     app.lab_zoom.pack(side="left", padx=(0, 4))
     app.zb = ttk.Combobox(zoom_box, textvariable=app.zoom_var, values=ZOOMS,
@@ -38,9 +40,8 @@ def build_configbar(app, f1, IX, IY):
     app.ep_entry.grid(row=1, column=3, padx=2, sticky="ew")
     app._toggle(f1, app.remember_var, "记住Key", app._save_cfg).grid(row=1, column=4, padx=IX, sticky="w")
     f1.columnconfigure(3, weight=1, minsize=80)
-    # col5 空档列：minsize 保证显示开关与界面缩放区始终有可见间距，
-    # 宽窗时 weight=1 继续放大间距。
-    f1.columnconfigure(5, weight=1, minsize=12)
+    # col5 空档列：minsize 保证显示开关与界面缩放区始终有可见间距。
+    f1.columnconfigure(5, minsize=12)
     for entry in (app.key_entry, app.region_entry, app.ep_entry):
         app._bind_entry_context_menu(entry)
     app._refresh_engine_fields()

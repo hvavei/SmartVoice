@@ -85,9 +85,8 @@ def build_dubpanel(app, dub_box, IX, IY):
         elif cur_saved:
             cb_voice.set(cur_saved)
         elif slot_items:
-            cur_vid = app.voices.get(app.selected, "")
-            def_matched = next((item for item in slot_items if item.endswith(cur_vid)), slot_items[0])
-            cb_voice.set(def_matched)
+            # 独立默认：取当前筛选列表首项，不跟随人声区选中人声。
+            cb_voice.set(slot_items[0])
 
         # 精巧正方形色块，带细灰色描边
         box_sz = max(14, round(16 * app._zx()))

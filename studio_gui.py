@@ -1752,16 +1752,22 @@ class App(ProductUI):
     def reset_roles(self):
         if self._active_task:
             return
-        default_voice = self.voices.get(self.selected, '')
-        display = f'{gender_of(self.selected) or "中"} {default_voice}' if default_voice else ''
+        # 完全独立：人声重置为当前筛选列表首项，不跟随人声区选中人声。
+        fv = getattr(self, 'dub_filter_var', None)
+        filter_lang = fv.get() if fv else "全部"
+        first_item = ""
+        for disp, vid in self.voices.items():
+            if want_voice(filter_lang, vid):
+                first_item = f"{gender_of(disp) or '中'} {vid}"
+                break
         for i, slot in enumerate(self._dub.get('slots', [])):
             slot['name'].set('旁白' if i == 0 else f'角色{i + 1}')
             slot['on'].set(i == 0)
-            slot['combo'].set(display)
+            slot['combo'].set(first_item)
             slot['update_color']()
         self._save_cfg()
         self._schedule_editor_info()
-        self.status.config(text='角色已重置：旁白启用，其余关闭，人声恢复为当前选中人声')
+        self.status.config(text='角色已重置：旁白启用，其余关闭，人声恢复为当前筛选列表首项')
 
     def _dub_all(self, on):
         # 测试专用：批量开/关全部槽位（顶栏/面板无此入口）。
@@ -1850,19 +1856,14 @@ class App(ProductUI):
         for s in self._dub.get("slots", []):
             try:
                 cb = s["combo"]
-                cur = cb.get().strip()
                 cb.config(values=slot_items)
                 if not slot_items:
                     cb.set("")
                     continue
-                # 筛选只约束下拉列表：当前人声仍在列表就保留槽位分配，不清已分配槽位。
-                cur_vid = cur.split()[-1] if " " in cur else self.voices.get(cur, "")
-                if cur_vid and cur_vid in self.voices.values():
+                # 跟随刷新：当前值不在筛选结果里就立即落到首项，不必点开下拉才刷新。
+                if cb.get().strip() in slot_items:
                     continue
-                # 当前人声已不在列表：回落到当前主人声或首项。
-                cur_main = self.voices.get(self.selected, "")
-                matched = next((item for item in slot_items if item.endswith(cur_main)), slot_items[0])
-                cb.set(matched)
+                cb.set(slot_items[0])
             except tk.TclError:
                 pass
 
