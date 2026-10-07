@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import theme
+from ui.voicepanel import FILTERS
 
 MAX_DUB = 9      # 最多9人配音
 SLOT_AUD_W = 6   # 配音卡片内试听小按钮统一宽
@@ -24,15 +25,18 @@ def build_dubpanel(app, dub_box, IX, IY):
     box.configure(labelwidget=title_frame, labelanchor="nw")
     head = ttk.Frame(box)
     head.pack(fill="x", padx=IX, pady=IY)
+    head.columnconfigure(0, weight=1)
+    head.columnconfigure(1, weight=1)
+    head.columnconfigure(2, weight=1)
 
-    # 筛选按钮：同人声面板，放在角色分配前面
+    # 筛选按钮：同人声面板，按语言筛选（FILTERS 单一来源），放在角色分配前面
     app.dub_filter_var = getattr(app, 'dub_filter_var', tk.StringVar(value="全部"))
     app.dub_fb = ttk.Combobox(head, textvariable=app.dub_filter_var,
-                              values=["全部", "男", "女"], state="readonly", width=6)
-    app.dub_fb.pack(side="left", padx=2)
+                              values=FILTERS, state="readonly")
+    app.dub_fb.grid(row=0, column=0, sticky="ew", padx=2)
     app.dub_fb.bind("<<ComboboxSelected>>", lambda e: app._refresh_dub_voices())
-    app._mkbtn(head, "角色分配", app.on_format_dialogue_lines, width=8).pack(side="left", padx=2)
-    app._mkbtn(head, "角色重置", app.reset_roles, width=8).pack(side="left", padx=2)
+    app._mkbtn(head, "角色分配", app.on_format_dialogue_lines).grid(row=0, column=1, sticky="ew", padx=2)
+    app._mkbtn(head, "角色重置", app.reset_roles).grid(row=0, column=2, sticky="ew", padx=2)
     scroll = ttk.Frame(box)
     scroll.pack(fill="both", expand=True, padx=IX, pady=(0, IY))
     app.dub_canvas = tk.Canvas(scroll, bg=theme.BG, highlightthickness=0, bd=0)

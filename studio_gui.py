@@ -269,8 +269,9 @@ class App(ProductUI):
                     fieldbackground=PANEL, font=self._font(), rowheight=rh, borderwidth=0)
         s.configure("Treeview.Heading", background=HEADING, foreground=FG, font=self._font())
         s.map("Treeview", background=[("selected", SEL)], foreground=[("selected", FG)])
-        # 隐藏列分隔线视觉标识（保留 _block_column_resize 禁止拖拽行为）
+        # 隐藏列分隔线视觉标识 + 禁止拖拽光标（保留 _block_column_resize 行为）
         s.configure("Treeview", separatorwidth=0)
+        s.configure("Treeview.Heading", separatorwidth=0)
 
     def _load_engine_voices(self):
         kind = engine.kind_of(self.engine_var.get())
@@ -443,7 +444,16 @@ class App(ProductUI):
             self.tree.column(column, width=width)
 
     def _block_column_resize(self, event):
-        if self.tree.identify_region(event.x, event.y) == 'separator':
+        # 分隔线区域：强制箭头光标，不显示已弃用的拖拽指示
+        try:
+            region = self.tree.identify_region(event.x, event.y)
+        except tk.TclError:
+            return
+        if region == 'separator':
+            try:
+                self.tree.config(cursor='arrow')
+            except tk.TclError:
+                pass
             return 'break'
 
     def _open_editor_double_click(self, event=None):
@@ -1800,28 +1810,31 @@ class App(ProductUI):
 
     def _refresh_dub_voices(self):
         # 人声表变化后刷新各槽下拉, 格式只显示: 性别 + 代号 (如: 女 zh-CN-XiaoxiaoNeural)
-        # 筛选：按 dub_filter_var 过滤性别
-        filter_gender = getattr(self, 'dub_filter_var', None)
-        filter_val = filter_gender.get() if filter_gender else "全部"
+        # 筛选：同人声面板复用 want_voice 按代号过滤语种（同一筛选对象，同一判定）。
+        filter_val = getattr(self, 'dub_filter_var', None)
+        filter_lang = filter_val.get() if filter_val else "全部"
         slot_items = []
         for disp, vid in self.voices.items():
-            g = gender_of(disp) or "中"
-            if filter_val != "全部" and g != filter_val:
+            if not want_voice(filter_lang, vid):
                 continue
-            slot_items.append(f"{g} {vid}")
+            slot_items.append(f"{gender_of(disp) or '中'} {vid}")
 
         for s in self._dub.get("slots", []):
             try:
                 cb = s["combo"]
-                cur = cb.get()
+                cur = cb.get().strip()
                 cb.config(values=slot_items)
                 if not slot_items:
                     cb.set("")
-                if cur not in slot_items and slot_items:
-                    # 匹配当前选择的人声代号
-                    cur_vid = self.voices.get(self.selected, "")
-                    matched = next((item for item in slot_items if item.endswith(cur_vid)), slot_items[0])
-                    cb.set(matched)
+                    continue
+                # 筛选只约束下拉列表：当前人声仍在列表就保留槽位分配，不清已分配槽位。
+                cur_vid = cur.split()[-1] if " " in cur else self.voices.get(cur, "")
+                if cur_vid and cur_vid in self.voices.values():
+                    continue
+                # 当前人声已不在列表：回落到当前主人声或首项。
+                cur_main = self.voices.get(self.selected, "")
+                matched = next((item for item in slot_items if item.endswith(cur_main)), slot_items[0])
+                cb.set(matched)
             except tk.TclError:
                 pass
 
