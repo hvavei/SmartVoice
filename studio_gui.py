@@ -1823,6 +1823,19 @@ class App(ProductUI):
             except tk.TclError:
                 pass
 
+    def _sync_dub_filter(self):
+        # 人声面板筛选变化 → 配音面板跟随同一筛选值并刷新槽位下拉。
+        fv = getattr(self, 'dub_filter_var', None)
+        if fv is None:
+            return
+        try:
+            val = self.filter_var.get()
+            if fv.get() != val:
+                fv.set(val)
+        except tk.TclError:
+            return
+        self._refresh_dub_voices()
+
     def _refresh_dub_voices(self):
         # 人声表变化后刷新各槽下拉, 格式只显示: 性别 + 代号 (如: 女 zh-CN-XiaoxiaoNeural)
         # 筛选：同人声面板复用 want_voice 按代号过滤语种（同一筛选对象，同一判定）。

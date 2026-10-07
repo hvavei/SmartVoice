@@ -12,7 +12,7 @@ def build_voicepanel(app, voice_box, IX, IY):
     app.b_refresh.grid(row=0, column=0, padx=2)
     app.fb = ttk.Combobox(bar, textvariable=app.filter_var, values=FILTERS, state="readonly", width=12)
     app.fb.grid(row=0, column=1, padx=2, sticky="ew")
-    app.fb.bind("<<ComboboxSelected>>", lambda e: app.rebuild_list())
+    app.fb.bind("<<ComboboxSelected>>", lambda e: (app.rebuild_list(), app._sync_dub_filter()))
     app.lab_gender = ttk.Label(bar, text="性别:")
     app.lab_gender.grid(row=0, column=2, padx=2)
     app.gb = ttk.Combobox(bar, textvariable=app.gender_var, values=["全部", "男", "女"], state="readonly", width=6)
