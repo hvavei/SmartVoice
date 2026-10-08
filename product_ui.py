@@ -117,6 +117,23 @@ class ProductUI:
         widget.bind('<<Modified>>', self._editor_modified)
         widget.bind('<KeyRelease>', lambda e: self._schedule_editor_info())
         widget.bind('<ButtonRelease-1>', lambda e: self._schedule_editor_info())
+
+        def _clear_empty_selection(event=None):
+            # 空文本拖选会给空白行挂 sel 标蓝：widget 绑定先于 Text 类绑定执行，
+            # after_idle 延后到类绑定挂完 sel 之后再清除。
+            try:
+                if not widget.get('1.0', 'end-1c'):
+                    widget.after_idle(_do_clear)
+            except tk.TclError:
+                pass
+
+        def _do_clear():
+            try:
+                widget.tag_remove('sel', '1.0', 'end')
+            except tk.TclError:
+                pass
+        widget.bind('<B1-Motion>', _clear_empty_selection, add='+')
+        widget.bind('<ButtonRelease-1>', _clear_empty_selection, add='+')
         widget.bind('<Control-z>', lambda e: self._undo(False))
         widget.bind('<Control-y>', lambda e: self._undo(True))
         widget.bind('<Control-Shift-Z>', lambda e: self._undo(True))
@@ -233,7 +250,10 @@ class ProductUI:
         self.editor_role.config(text=f'{len(raw)}字 · {paragraphs}段 · 当前角色：{role}'
                                 + (f' · 未绑定：{",".join(sorted(missing))[:45]}' if missing else ''))
         if hasattr(self, '_placeholder_label'):
-            self._placeholder_label.place_forget() if raw else self._placeholder_label.place(x=12, y=8)
+            if raw:
+                self._placeholder_label.place_forget()
+            else:
+                self._placeholder_label.place(x=0, y=0, relwidth=1, relheight=1)
 
     def open_editor(self):
         if self._editor_window and self._editor_window.winfo_exists():

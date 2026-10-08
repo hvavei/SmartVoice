@@ -39,9 +39,13 @@ def build_configbar(app, f1, IX, IY):
     app.ep_entry = ttk.Entry(f1, textvariable=app.ep_var, width=20, justify="center")
     app.ep_entry.grid(row=1, column=3, padx=2, sticky="ew")
     app._toggle(f1, app.remember_var, "记住Key", app._save_cfg).grid(row=1, column=4, padx=IX, sticky="w")
-    f1.columnconfigure(3, weight=1, minsize=80)
+    ttk.Frame(f1).grid(row=0, column=8, sticky="ew")
+    # col8 尾部弹性空档：吸收宽窗绝大部分多余空间（weight=9），缩放区始终紧随
+    # 显示开关（间距恒定），不被推到窗口右缘；col3 保留 weight 仅供窄窗收缩。
+    f1.columnconfigure(3, weight=1, minsize=70)
     # col5 空档列：minsize 保证显示开关与界面缩放区始终有可见间距。
     f1.columnconfigure(5, minsize=12)
+    f1.columnconfigure(8, weight=9)
     for entry in (app.key_entry, app.region_entry, app.ep_entry):
         app._bind_entry_context_menu(entry)
     app._refresh_engine_fields()

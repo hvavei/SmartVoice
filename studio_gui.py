@@ -487,9 +487,10 @@ class App(ProductUI):
                    highlightbackground=GREEN if on else GREY)
 
     def _setup_placeholder(self):
-        """提示是覆盖标签，不写进原稿和撤销栈。"""
+        """提示是覆盖标签，不写进原稿和撤销栈。全尺寸覆盖：空文本时点击命中占位符，
+        不会误选空白行标蓝；加内边距会破坏点击转交坐标，保持无内边距。"""
         self._placeholder_label = tk.Label(self.text, text='输入或导入原稿 · 双击打开大窗口编辑',
-                                             bg=PANEL, fg=MUTED, font=self._font())
+                                             bg=PANEL, fg=MUTED, font=self._font(), anchor='nw')
 
         def _placeholder_click(e):
             # 单击转交 Text：占位符隐藏后第二击才落在同一绑定表上，
@@ -512,7 +513,7 @@ class App(ProductUI):
         if self.text_content:
             self.text.insert("1.0", self.text_content)
         else:
-            self._placeholder_label.place(x=12, y=8)
+            self._placeholder_label.place(x=0, y=0, relwidth=1, relheight=1)
         self.text.edit_reset()
 
     def _get_real_text(self):
