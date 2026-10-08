@@ -16,10 +16,9 @@ def build_configbar(app, f1, IX, IY):
     app.lab_key = ttk.Label(f1, text="Key:", width=6, anchor="e")
     app.lab_key.grid(row=0, column=2, padx=IX, sticky="e")
     app.key_entry = ttk.Entry(f1, textvariable=app.key_var, width=20, justify="center")
-    app.key_entry.grid(row=0, column=3, padx=2, sticky="ew")
+    app.key_entry.grid(row=0, column=3, padx=IX, sticky="ew")
     app._apply_show()
     app._toggle(f1, app.show_var, "显示", app._apply_show).grid(row=0, column=4, padx=IX, sticky="w")
-    ttk.Frame(f1).grid(row=0, column=5, sticky="ew")
     zoom_box = ttk.Frame(f1)
     # 缩放区钉在右侧：与窗口右缘距离固定且留有余量（padx 右 IX+8），
     # 宽窗多余空间全部由 Key/终结点输入框列（col3 weight=1）吸收铺满同行。
@@ -37,12 +36,11 @@ def build_configbar(app, f1, IX, IY):
     app.lab_ep = ttk.Label(f1, text="终结点:", width=6, anchor="e")
     app.lab_ep.grid(row=1, column=2, padx=IX, sticky="e")
     app.ep_entry = ttk.Entry(f1, textvariable=app.ep_var, width=20, justify="center")
-    app.ep_entry.grid(row=1, column=3, padx=2, sticky="ew")
+    app.ep_entry.grid(row=1, column=3, padx=IX, sticky="ew")
     app._toggle(f1, app.remember_var, "记住Key", app._save_cfg).grid(row=1, column=4, padx=IX, sticky="w")
+    # 功能区间距统一为 2×IX：各控件 padx=IX，相邻间距自然一致，随缩放等比。
     # col3 weight=1：Key/终结点输入框吸收宽窗全部多余空间铺满同行，窄窗收缩到 minsize。
     f1.columnconfigure(3, weight=1, minsize=70)
-    # col5 空档列：minsize 保证显示开关与界面缩放区始终有可见间距。
-    f1.columnconfigure(5, minsize=12)
     for entry in (app.key_entry, app.region_entry, app.ep_entry):
         app._bind_entry_context_menu(entry)
     app._refresh_engine_fields()
