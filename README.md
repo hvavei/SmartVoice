@@ -18,4 +18,5 @@
 <img src="https://raw.githubusercontent.com/hvavei/SmartVoice/721430a5f4c53f04562ab7a4b7e4586eb9cb359e/PixPin_2026-10-09_10-52-26.png">  
 
 ## 🐞 [反馈问题](https://github.com/hvavei/SmartVoice/issues)
-## ☕ [请我喝咖啡](https://github.com/hvavei/SmartVoice/blob/70fc44a4d8433f37b481dbed1970b0d223f7b15b/red_heart.png)
+## ☕ [请我喝咖啡]
+<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/70fc44a4d8433f37b481dbed1970b0d223f7b15b/red_heart.png">
