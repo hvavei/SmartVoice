@@ -19,7 +19,7 @@
 
 ## 🐞 [反馈问题](https://github.com/hvavei/SmartVoice/issues)
 
-## ☕ [请我喝咖啡]
+## ☕ 请我喝咖啡
 <img src="https://raw.githubusercontent.com/hvavei/SmartVoice/70fc44a4d8433f37b481dbed1970b0d223f7b15b/red_heart.png">
 
 ## Star 趋势
