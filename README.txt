@@ -5,7 +5,8 @@ SmartVoice 3.1.0
 更新：关于 → 检查更新（GitHub Releases）；没有公开版本时会明确提示。
 
 安装：release\SmartVoice-Setup-Standard.exe（标准版）或 SmartVoice-Setup-Full.exe（含OCR/多音字完整版），均无需 Python。
-程序默认安装到 %LOCALAPPDATA%\Programs\SmartVoice。
+程序默认安装到 %LOCALAPPDATA%\Programs\SmartVoice，可自定义：向导目录页直接改，或 /DIR= 命令行指定；
+输出目录默认跟随安装路径，可在导出设置中更改。
 开发目录入口：dist\SmartVoice.exe，必须保留 _internal 依赖目录。
 数字签名状态见 release\signature-status.txt；无正式证书时可 --self-signed 本机自签。
 卸载：开始菜单 → SmartVoice → 卸载 SmartVoice，或安装目录中的 unins000.exe。
