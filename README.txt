@@ -62,7 +62,7 @@ Azure 风格和角色来自官方元数据；未知模型族的高级参数保�
 发布与组件依赖：
 GitHub Release 需挂载 4 个产物：SmartVoice-Setup-Standard.exe、SmartVoice-Setup-Full.exe、SmartVoice-Signing-Root.cer、signature-status.txt，
 以及 2 个组件包（g2pw-3.1.0-cp314-win-amd64.zip、ocr-3.1.0-cp314-win-amd64.zip，构建自动落在 release/）。
-标准版在线组件发布（tag components-v3.1.0）前下载提示未上传，支持本地导入 zip 激活；完整版内置全套组件无需下载。
+标准版在线组件包与安装包同挂版本 Release（v3.1.0），软件内"管理组件"自动从该 Release 下载；完整版内置全套组件无需下载。
 离线重新导入可修复损坏的组件；替换失败恢复旧目录。组件已加载时需重启后再导入修复。
 软件仅依赖 Windows 10/11 x64 环境，无管理员权限要求，不依赖本机既有配置或特定路径。
 兼容性说明：未调用 Win11 专属接口，Tk 9/DirectWrite 在 Win10 下正常；ARM64 未实测（安装包允许经 x64 仿真安装，原生推理依赖均为 x64 构建，速度未经验证）。

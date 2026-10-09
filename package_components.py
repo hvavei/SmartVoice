@@ -104,7 +104,7 @@ def package(full, work, release):
         with archive_path.open('rb') as f:
             digest = hashlib.file_digest(f, 'sha256').hexdigest()
         result['components'][name] = dict(manifest, sha256=digest, bytes=archive_path.stat().st_size,
-            unpacked_bytes=unpacked, url=f'{appmeta.REPOSITORY}/releases/download/components-v{appmeta.VERSION}/{filename}')
+            unpacked_bytes=unpacked, url=f'{appmeta.REPOSITORY}/releases/download/v{appmeta.VERSION}/{filename}')
     text = json.dumps(result, ensure_ascii=False, indent=2)
     for path in (release/'components.json', internal/'components.json', std_internal/'components.json'):
         path.write_text(text, encoding='utf-8')
