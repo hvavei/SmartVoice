@@ -12,16 +12,15 @@
 
 ## 界面预览 
 * 暖白·初
-<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/e56e1f8eee43687e8c1344bae0a07e7a1aec3301/PixPin_2026-10-09_10-51-43.png">
--------------------------------------------------------------------------------------------------------------------------------------------
+<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/e56e1f8eee43687e8c1344bae0a07e7a1aec3301/PixPin_2026-10-09_10-51-43.png" width="650">
 
 * 雾蓝
-<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/721430a5f4c53f04562ab7a4b7e4586eb9cb359e/PixPin_2026-10-09_10-52-26.png">  
+<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/721430a5f4c53f04562ab7a4b7e4586eb9cb359e/PixPin_2026-10-09_10-52-26.png" width="650">  
 
 ## 🐞 [反馈问题](https://github.com/hvavei/SmartVoice/issues)
 
 ## ☕ 请我喝咖啡
-<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/70fc44a4d8433f37b481dbed1970b0d223f7b15b/red_heart.png">
+<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/70fc44a4d8433f37b481dbed1970b0d223f7b15b/red_heart.png" width="350">
 
 ## Star 趋势
 
