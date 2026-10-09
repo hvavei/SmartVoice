@@ -1,5 +1,5 @@
 ## SmartVoice简介
-**SmartVoice：Windows 桌面文本转语音工作台
+**SmartVoice**：Windows 桌面文本转语音工作台
 - 四种合成引擎：Edge 免费（免Key）／Azure／OpenAI 兼容／火山引擎
 - 多人配音（最多9人）：角色槽位、语种筛选、角色分配/重置，左右功能区完全独立
 - 独立大窗编辑、导入 TXT/MD/PDF/DOCX/SRT/VTT/ASS/SSA/LRC/JSON/CSV
