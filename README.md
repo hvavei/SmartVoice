@@ -11,8 +11,8 @@
 - 两套主题（暖白·初/雾蓝）、界面缩放 80%~150%
 
 ## 界面预览 
-<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/721430a5f4c53f04562ab7a4b7e4586eb9cb359e/PixPin_2026-10-09_10-52-26.png" width="500">
-<img src="https://raw.githubusercontent.com/hvavei/SmartVioce/e56e1f8eee43687e8c1344bae0a07e7a1aec3301/PixPin_2026-10-09_10-51-43.png" width="500">
+<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/721430a5f4c53f04562ab7a4b7e4586eb9cb359e/PixPin_2026-10-09_10-52-26.png">
+<img src="https://raw.githubusercontent.com/hvavei/SmartVoice/e56e1f8eee43687e8c1344bae0a07e7a1aec3301/PixPin_2026-10-09_10-51-43.png">
   
 
 🐞 [反馈问题](https://github.com/hvavei/SmartVoice/issues)
