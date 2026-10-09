@@ -51,5 +51,5 @@ SmartVoice 是一款 Windows 桌面文本转语音（TTS）工作台：输入或
 
 ## 获取
 - 项目：https://github.com/hvavei/SmartVoice
-- 下载：https://github.com/hvavei/SmartVoice/releases（Standard 标准版 / Full 完整版）
+- 下载：https://github.com/hvavei/SmartVoice/releases （Standard 标准版 / Full 完整版）
 - 反馈：https://github.com/hvavei/SmartVoice/issues
