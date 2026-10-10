@@ -1,4 +1,5 @@
-## [📄SmartVoice 软件介绍](https://github.com/hvavei/SmartVoice/blob/e6619dd9bc1a2f6b1cb18a4cbc18163667aeb41f/%E8%BD%AF%E4%BB%B6%E4%BB%8B%E7%BB%8D.md) · [📘SmartVoice 使用说明](https://github.com/hvavei/SmartVoice/blob/6d2912a451c2243b82afbabbe5809769cc330643/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.md)
+## [📄SmartVoice 软件介绍](https://github.com/hvavei/SmartVoice/blob/e6619dd9bc1a2f6b1cb18a4cbc18163667aeb41f/%E8%BD%AF%E4%BB%B6%E4%BB%8B%E7%BB%8D.md) · [📘SmartVoice 使用说明](https://github.com/hvavei/SmartVoice/blob/6d2912a451c2243b82afbabbe5809769cc330643/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.md) · 🐞 [反馈问题](https://github.com/hvavei/SmartVoice/issues)
+
 
 ## SmartVoice简介
 **SmartVoice**：Windows 桌面文本转语音工作台
@@ -16,8 +17,6 @@
 
 * 雾蓝
 <img src="https://raw.githubusercontent.com/hvavei/SmartVoice/721430a5f4c53f04562ab7a4b7e4586eb9cb359e/PixPin_2026-10-09_10-52-26.png">  
-
-## 🐞 [反馈问题](https://github.com/hvavei/SmartVoice/issues)
 
 ## ☕ 请我喝咖啡
 <img src="https://raw.githubusercontent.com/hvavei/SmartVoice/70fc44a4d8433f37b481dbed1970b0d223f7b15b/red_heart.png" width="350">
